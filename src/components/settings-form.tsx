@@ -31,8 +31,14 @@ export function SettingsForm(props: SettingsFormProps) {
   useEffect(() => {
     if (!props.suggestBrowserTimezone || props.timezone !== "UTC") return;
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (browserTimezone && timezoneInput.current) {
-      timezoneInput.current.value = browserTimezone;
+    const input = timezoneInput.current;
+    if (
+      browserTimezone &&
+      input &&
+      input.value === props.timezone &&
+      document.activeElement !== input
+    ) {
+      input.value = browserTimezone;
     }
   }, [props.suggestBrowserTimezone, props.timezone]);
 

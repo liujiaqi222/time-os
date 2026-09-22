@@ -162,4 +162,20 @@ test("setup shows an actionable error when the schema is incomplete", async ({
   await page.goto("/setup");
   await expect(page.getByText("数据库 schema 尚未就绪")).toBeVisible();
   await expect(page.getByText(/pnpm db:migrate/)).toBeVisible();
+
+  const recoveryPool = new Pool({
+    connectionString:
+      process.env.TEST_DATABASE_URL ??
+      "postgresql://postgres:postgres@localhost:55432/time_os_test",
+  });
+  try {
+    await recoveryPool.query("drop schema if exists public cascade");
+    await recoveryPool.query("drop schema if exists drizzle cascade");
+    await recoveryPool.query("create schema public");
+    const { drizzle } = await import("drizzle-orm/node-postgres");
+    const { migrate } = await import("drizzle-orm/node-postgres/migrator");
+    await migrate(drizzle(recoveryPool), { migrationsFolder: "drizzle" });
+  } finally {
+    await recoveryPool.end();
+  }
 });

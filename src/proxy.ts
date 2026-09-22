@@ -38,6 +38,7 @@ export const config = {
   matcher: [
     "/today/:path*",
     "/goals/:path*",
+    "/tracks/:path*",
     "/history/:path*",
     "/settings/:path*",
     "/setup/:path*",
