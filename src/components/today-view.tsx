@@ -178,7 +178,10 @@ export function TodayView({
 
       {/* Active Session Alert when attempting to start another */}
       {activeSessionAlert && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900 shadow-sm">
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900 shadow-sm"
+        >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="font-semibold">已有正在运行的 Focus Session</p>
@@ -199,7 +202,10 @@ export function TodayView({
       )}
 
       {errorMsg && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
           {errorMsg}
         </div>
       )}

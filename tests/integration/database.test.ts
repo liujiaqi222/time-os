@@ -461,6 +461,19 @@ describe("session service and focus execution loop", () => {
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.endedAt).not.toBeNull();
 
+    // Cancelled sessions should be excluded from today stats
+    const dashboard = await sessionService.getDashboard(web);
+    const cancelledSessionFocus = dashboard.todayStats.totalFocusSeconds;
+    // Start and immediately cancel a new session, verify stats don't increase
+    const tempSession = await sessionService.startSession(web, {
+      trackId: track.id,
+    });
+    await sessionService.cancelSession(web, tempSession.id);
+    const dashboardAfter = await sessionService.getDashboard(web);
+    expect(dashboardAfter.todayStats.totalFocusSeconds).toBe(
+      cancelledSessionFocus,
+    );
+
     // Cancelled session cannot be resumed or finished
     await expect(
       sessionService.resumeSession(web, session.id),

@@ -198,4 +198,34 @@ test.describe("Focus execution loop", () => {
     await page.getByRole("button", { name: "确定取消" }).click();
     await page.waitForURL(/\/today$/);
   });
+
+  test("overtime does not automatically finish the session", async ({
+    page,
+  }) => {
+    await loginAndSetup(page);
+    await ensureNoActiveSession(page);
+
+    await page.goto("/today");
+    const startButton = page
+      .getByRole("button", {
+        name: /开始专注|直接开始/,
+      })
+      .first();
+    await startButton.click();
+    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
+
+    // Advance the clock well beyond the planned focus duration (e.g. 30 minutes)
+    await page.clock.fastForward("30:00");
+
+    // The session should still be active — verify overtime indicator is shown
+    // and Pause/Finish buttons are still available (not auto-finished)
+    await expect(page.getByText(/超时|Overtime/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /暂停|继续/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /完成/ })).toBeVisible();
+
+    // Clean up
+    await page.getByRole("button", { name: "取消" }).click();
+    await page.getByRole("button", { name: "确定取消" }).click();
+    await page.waitForURL(/\/today$/);
+  });
 });

@@ -55,6 +55,8 @@ export function FocusView({
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [isCancelOpen, setIsCancelOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const reviewModalRef = useRef<HTMLDivElement>(null);
+  const cancelModalRef = useRef<HTMLDivElement>(null);
 
   // Review modal state
   const [reviewOutcome, setReviewOutcome] = useState<SessionOutcome>(
@@ -81,6 +83,7 @@ export function FocusView({
   >(null);
   const [editingText, setEditingText] = useState("");
   const distractionInputRef = useRef<HTMLInputElement>(null);
+  const [distractionError, setDistractionError] = useState<string | null>(null);
 
   // Live timer interval
   useEffect(() => {
@@ -89,6 +92,50 @@ export function FocusView({
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Focus trap for modals
+  useEffect(() => {
+    const modalRef = isReviewOpen
+      ? reviewModalRef.current
+      : isCancelOpen
+        ? cancelModalRef.current
+        : null;
+    if (!modalRef) return;
+
+    const focusableSelector =
+      'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+
+    // Focus the first focusable element on open
+    const firstFocusable =
+      modalRef.querySelector<HTMLElement>(focusableSelector);
+    firstFocusable?.focus();
+
+    const handleTrapFocus = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+
+      const focusableElements =
+        modalRef.querySelectorAll<HTMLElement>(focusableSelector);
+      if (focusableElements.length === 0) return;
+
+      const first = focusableElements[0]!;
+      const last = focusableElements[focusableElements.length - 1]!;
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleTrapFocus);
+    return () => document.removeEventListener("keydown", handleTrapFocus);
+  }, [isReviewOpen, isCancelOpen]);
 
   const elapsedSeconds = calculateElapsedSeconds(session, now);
   const plannedSeconds = session.plannedMinutes
@@ -154,6 +201,7 @@ export function FocusView({
   // Handle distraction creation
   const handleCreateDistraction = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    setDistractionError(null);
     const textToSave = distractionText.trim() || null;
     const result = await createDistractionAction({
       sessionId: session.id,
@@ -162,19 +210,25 @@ export function FocusView({
     if (result.ok) {
       setDistractionsList((prev) => [...prev, result.data]);
       setDistractionText("");
+    } else {
+      setDistractionError(result.error.message);
     }
   };
 
   // Handle distraction archive
   const handleArchiveDistraction = async (id: string) => {
+    setDistractionError(null);
     const result = await archiveDistractionAction(id);
     if (result.ok) {
       setDistractionsList((prev) => prev.filter((d) => d.id !== id));
+    } else {
+      setDistractionError(result.error.message);
     }
   };
 
   // Handle distraction update
   const handleSaveDistractionEdit = async (id: string) => {
+    setDistractionError(null);
     const result = await updateDistractionAction(id, {
       text: editingText.trim() || null,
     });
@@ -183,6 +237,8 @@ export function FocusView({
         prev.map((d) => (d.id === id ? result.data : d)),
       );
       setEditingDistractionId(null);
+    } else {
+      setDistractionError(result.error.message);
     }
   };
 
@@ -225,8 +281,12 @@ export function FocusView({
       if (e.key === "Escape") {
         if (isReviewOpen) setIsReviewOpen(false);
         if (isCancelOpen) setIsCancelOpen(false);
+        if (editingDistractionId) setEditingDistractionId(null);
         return;
       }
+
+      // Don't trigger shortcuts when modals are open
+      if (isReviewOpen || isCancelOpen) return;
 
       if (isTypingElement(document.activeElement)) return;
 
@@ -245,7 +305,13 @@ export function FocusView({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleTogglePause, isCancelOpen, isReviewOpen, noteText]);
+  }, [
+    editingDistractionId,
+    handleTogglePause,
+    isCancelOpen,
+    isReviewOpen,
+    noteText,
+  ]);
 
   const isPaused = session.status === "paused";
 
@@ -290,7 +356,10 @@ export function FocusView({
       {/* Main Container */}
       <main className="mx-auto max-w-2xl px-5 py-8 sm:py-12">
         {actionError && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div
+            role="alert"
+            className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+          >
             {actionError}
           </div>
         )}
@@ -450,6 +519,15 @@ export function FocusView({
                 </Button>
               </form>
 
+              {distractionError && (
+                <div
+                  role="alert"
+                  className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"
+                >
+                  {distractionError}
+                </div>
+              )}
+
               {/* Distractions List */}
               {distractionsList.length > 0 && (
                 <ul className="divide-y divide-stone-100 rounded-lg border border-stone-100 bg-stone-50/50">
@@ -459,7 +537,13 @@ export function FocusView({
                       className="flex items-center justify-between gap-3 p-3 text-sm"
                     >
                       {editingDistractionId === d.id ? (
-                        <div className="flex flex-1 items-center gap-2">
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleSaveDistractionEdit(d.id);
+                          }}
+                          className="flex flex-1 items-center gap-2"
+                        >
                           <Input
                             value={editingText}
                             onChange={(e) => setEditingText(e.target.value)}
@@ -467,13 +551,14 @@ export function FocusView({
                             autoFocus
                           />
                           <Button
+                            type="submit"
                             size="sm"
                             className="h-8 text-xs"
-                            onClick={() => handleSaveDistractionEdit(d.id)}
                           >
                             保存
                           </Button>
                           <Button
+                            type="button"
                             size="sm"
                             variant="ghost"
                             className="h-8 text-xs"
@@ -481,7 +566,7 @@ export function FocusView({
                           >
                             取消
                           </Button>
-                        </div>
+                        </form>
                       ) : (
                         <>
                           <span className="truncate text-stone-700">
@@ -527,6 +612,7 @@ export function FocusView({
       {/* Review Modal */}
       {isReviewOpen && (
         <div
+          ref={reviewModalRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="review-dialog-title"
@@ -547,7 +633,10 @@ export function FocusView({
               </div>
               <button
                 type="button"
-                onClick={() => setIsReviewOpen(false)}
+                onClick={() => {
+                  if (reviewNote !== noteText) setNoteText(reviewNote);
+                  setIsReviewOpen(false);
+                }}
                 className="rounded-lg p-1 text-stone-400 hover:text-stone-700"
               >
                 <X className="size-5" aria-hidden="true" />
@@ -685,7 +774,10 @@ export function FocusView({
             </div>
 
             {reviewError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <div
+                role="alert"
+                className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+              >
                 {reviewError}
               </div>
             )}
@@ -695,7 +787,13 @@ export function FocusView({
               <Button
                 variant="ghost"
                 disabled={reviewSubmitting}
-                onClick={() => setIsReviewOpen(false)}
+                onClick={() => {
+                  // Sync note edits back so they're not lost
+                  if (reviewNote !== noteText) {
+                    setNoteText(reviewNote);
+                  }
+                  setIsReviewOpen(false);
+                }}
               >
                 取消
               </Button>
@@ -717,6 +815,7 @@ export function FocusView({
       {/* Cancel Confirmation Modal */}
       {isCancelOpen && (
         <div
+          ref={cancelModalRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="cancel-dialog-title"

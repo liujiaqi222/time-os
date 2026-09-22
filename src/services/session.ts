@@ -620,40 +620,68 @@ export function createSessionService(database: Database): SessionService {
           });
         }
 
-        // If already completed: idempotent check
+        // If already completed: idempotent early-return.
+        // Safety check: if the task is still pending but outcome requires a
+        // status change, the session was likely finished via finishSession()
+        // without processing the task. In that case, proceed to apply the
+        // task outcome instead of returning stale data.
         if (session.status === "completed") {
-          const [task] = session.taskId
-            ? await tx
-                .select()
-                .from(tasks)
-                .where(eq(tasks.id, session.taskId))
-                .limit(1)
-            : [null];
-          const [track] = await tx
-            .select()
-            .from(tracks)
-            .where(eq(tracks.id, session.trackId))
-            .limit(1);
-          const [nextTask] = track?.currentTaskId
-            ? await tx
-                .select()
-                .from(tasks)
-                .where(eq(tasks.id, track.currentTaskId))
-                .limit(1)
-            : [null];
-          return {
-            session,
-            task: task ?? null,
-            nextTask: nextTask ?? null,
-          };
+          let taskNeedsProcessing = false;
+          if (
+            session.taskId &&
+            (value.outcome === "completed" || value.outcome === "skip")
+          ) {
+            const [task] = await tx
+              .select()
+              .from(tasks)
+              .where(eq(tasks.id, session.taskId))
+              .limit(1);
+            if (task?.status === "pending") {
+              taskNeedsProcessing = true;
+            }
+          }
+
+          if (!taskNeedsProcessing) {
+            const [task] = session.taskId
+              ? await tx
+                  .select()
+                  .from(tasks)
+                  .where(eq(tasks.id, session.taskId))
+                  .limit(1)
+              : [null];
+            const [track] = await tx
+              .select()
+              .from(tracks)
+              .where(eq(tracks.id, session.trackId))
+              .limit(1);
+            const [nextTask] = track?.currentTaskId
+              ? await tx
+                  .select()
+                  .from(tasks)
+                  .where(eq(tasks.id, track.currentTaskId))
+                  .limit(1)
+              : [null];
+            return {
+              session,
+              task: task ?? null,
+              nextTask: nextTask ?? null,
+            };
+          }
+          // Fall through to process the task outcome on the already-completed session
         }
 
-        if (session.status !== "active" && session.status !== "paused") {
+        if (
+          session.status !== "active" &&
+          session.status !== "paused" &&
+          session.status !== "completed"
+        ) {
           throw new DomainError(
             "INVALID_SESSION_STATE",
             "Only active or paused sessions can be finished.",
           );
         }
+
+        const sessionAlreadyCompleted = session.status === "completed";
 
         let updatedTask: Task | null = null;
         let nextTask: Task | null = null;
@@ -769,6 +797,26 @@ export function createSessionService(database: Database): SessionService {
         }
 
         const now = new Date();
+        // Skip session finishing if it was already completed (fall-through
+        // from the idempotent check above where only the task needed processing)
+        if (sessionAlreadyCompleted) {
+          // Update the note if a new one was provided
+          if (value.note !== undefined && value.note !== session.note) {
+            await tx
+              .update(sessions)
+              .set({ note: value.note, updatedAt: now })
+              .where(eq(sessions.id, value.sessionId));
+          }
+          return {
+            session: {
+              ...session,
+              note: value.note !== undefined ? value.note : session.note,
+            },
+            task: updatedTask,
+            nextTask,
+          };
+        }
+
         const durationSeconds = calculateDurationSecondsOnFinish(session, now);
 
         const [completedSession] = await tx
@@ -1027,16 +1075,26 @@ export function createSessionService(database: Database): SessionService {
 
       const activeTracks: ActiveTrackItem[] = [];
 
-      for (const row of activeTrackRows) {
-        let nextTask: Task | null = null;
-        if (row.track.currentTaskId) {
-          const [t] = await database
-            .select()
-            .from(tasks)
-            .where(eq(tasks.id, row.track.currentTaskId))
-            .limit(1);
-          nextTask = t ?? null;
+      // Batch-fetch all current next tasks in a single query instead of N+1
+      const taskIds = activeTrackRows
+        .map((row) => row.track.currentTaskId)
+        .filter((id): id is string => id != null);
+
+      const nextTaskMap = new Map<string, Task>();
+      if (taskIds.length > 0) {
+        const nextTasks = await database
+          .select()
+          .from(tasks)
+          .where(inArray(tasks.id, taskIds));
+        for (const t of nextTasks) {
+          nextTaskMap.set(t.id, t);
         }
+      }
+
+      for (const row of activeTrackRows) {
+        const nextTask = row.track.currentTaskId
+          ? (nextTaskMap.get(row.track.currentTaskId) ?? null)
+          : null;
 
         activeTracks.push({
           track: row.track,
