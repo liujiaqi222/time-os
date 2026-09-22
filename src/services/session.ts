@@ -208,31 +208,36 @@ export function createSessionService(database: Database): SessionService {
       contextUnused(context);
       if (!id) invalid("Session ID is required.", "id");
 
-      const rows = await database
-        .select({
-          session: sessions,
-          track: tracks,
-          task: tasks,
-        })
-        .from(sessions)
-        .innerJoin(tracks, eq(sessions.trackId, tracks.id))
-        .leftJoin(tasks, eq(sessions.taskId, tasks.id))
-        .where(eq(sessions.id, id))
-        .limit(1);
+      // Independent reads — run in parallel (saves a round trip).
+      const [rows, distractionRows] = await Promise.all([
+        database
+          .select({
+            session: sessions,
+            track: tracks,
+            task: tasks,
+          })
+          .from(sessions)
+          .innerJoin(tracks, eq(sessions.trackId, tracks.id))
+          .leftJoin(tasks, eq(sessions.taskId, tasks.id))
+          .where(eq(sessions.id, id))
+          .limit(1),
+        database
+          .select()
+          .from(distractions)
+          .where(
+            and(
+              eq(distractions.sessionId, id),
+              isNull(distractions.archivedAt),
+            ),
+          )
+          .orderBy(asc(distractions.createdAt)),
+      ]);
 
       if (!rows.length || !rows[0]) {
         throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
           sessionId: id,
         });
       }
-
-      const distractionRows = await database
-        .select()
-        .from(distractions)
-        .where(
-          and(eq(distractions.sessionId, id), isNull(distractions.archivedAt)),
-        )
-        .orderBy(asc(distractions.createdAt));
 
       return {
         ...rows[0].session,
@@ -1004,34 +1009,51 @@ export function createSessionService(database: Database): SessionService {
         timezone,
       );
 
-      // 1. Active session
-      const activeSession = await findActiveSessionRow(database);
-
-      // 2. Today stats:
-      // Completed tasks today
-      const completedTasksToday = await database
-        .select({ count: sql<number>`count(*)` })
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.status, "completed"),
-            isNotNull(tasks.completedAt),
-            sql`${tasks.completedAt} >= ${todayStart} and ${tasks.completedAt} <= ${todayEnd}`,
+      // 1-3. Independent queries — run in parallel (each await is a network
+      // round trip, so only `settings` must come first: the others need the
+      // "today" range derived from its timezone).
+      const [
+        activeSession,
+        completedTasksToday,
+        todaySessions,
+        activeTrackRows,
+      ] = await Promise.all([
+        // 1. Active session
+        findActiveSessionRow(database),
+        // 2. Today stats: completed tasks today
+        database
+          .select({ count: sql<number>`count(*)` })
+          .from(tasks)
+          .where(
+            and(
+              eq(tasks.status, "completed"),
+              isNotNull(tasks.completedAt),
+              sql`${tasks.completedAt} >= ${todayStart} and ${tasks.completedAt} <= ${todayEnd}`,
+            ),
           ),
-        );
+        // Non-cancelled sessions intersecting today
+        database
+          .select()
+          .from(sessions)
+          .where(
+            and(
+              ne(sessions.status, "cancelled"),
+              sql`${sessions.startedAt} <= ${todayEnd} and (${sessions.endedAt} is null or ${sessions.endedAt} >= ${todayStart})`,
+            ),
+          ),
+        // 3. Active tracks under active goals
+        database
+          .select({
+            track: tracks,
+            goal: goals,
+          })
+          .from(tracks)
+          .innerJoin(goals, eq(tracks.goalId, goals.id))
+          .where(and(eq(tracks.status, "active"), eq(goals.status, "active")))
+          .orderBy(asc(goals.position), asc(tracks.position)),
+      ]);
 
       const completedTasksCount = Number(completedTasksToday[0]?.count ?? 0);
-
-      // Non-cancelled sessions intersecting today
-      const todaySessions = await database
-        .select()
-        .from(sessions)
-        .where(
-          and(
-            ne(sessions.status, "cancelled"),
-            sql`${sessions.startedAt} <= ${todayEnd} and (${sessions.endedAt} is null or ${sessions.endedAt} >= ${todayStart})`,
-          ),
-        );
 
       let totalFocusSeconds = 0;
       const trackSecondsMap = new Map<string, number>();
@@ -1062,33 +1084,59 @@ export function createSessionService(database: Database): SessionService {
         );
       }
 
-      // 3. Active tracks under active goals
-      const activeTrackRows = await database
-        .select({
-          track: tracks,
-          goal: goals,
-        })
-        .from(tracks)
-        .innerJoin(goals, eq(tracks.goalId, goals.id))
-        .where(and(eq(tracks.status, "active"), eq(goals.status, "active")))
-        .orderBy(asc(goals.position), asc(tracks.position));
-
       const activeTracks: ActiveTrackItem[] = [];
 
-      // Batch-fetch all current next tasks in a single query instead of N+1
+      // Round 3: batch-fetch all current next tasks in a single query instead
+      // of N+1. If the selected track can't be resolved from the request or
+      // settings alone, also fetch the most recent session activity among
+      // active tracks. Both queries run in parallel.
       const taskIds = activeTrackRows
         .map((row) => row.track.currentTaskId)
         .filter((id): id is string => id != null);
 
+      const canSelectWithoutDb =
+        (options?.manualTrackId != null &&
+          activeTrackRows.some(
+            (row) => row.track.id === options.manualTrackId,
+          )) ||
+        (settings?.selectedTrackId != null &&
+          activeTrackRows.some(
+            (row) => row.track.id === settings.selectedTrackId,
+          ));
+      const needsRecentSession =
+        !canSelectWithoutDb && activeTrackRows.length > 0;
+
+      const nextTasksPromise: Promise<Task[]> =
+        taskIds.length > 0
+          ? database.select().from(tasks).where(inArray(tasks.id, taskIds))
+          : Promise.resolve([]);
+
+      const recentSessionPromise: Promise<{ trackId: string }[]> =
+        needsRecentSession
+          ? database
+              .select({ trackId: sessions.trackId })
+              .from(sessions)
+              .where(
+                and(
+                  ne(sessions.status, "cancelled"),
+                  inArray(
+                    sessions.trackId,
+                    activeTrackRows.map((row) => row.track.id),
+                  ),
+                ),
+              )
+              .orderBy(desc(sessions.startedAt))
+              .limit(1)
+          : Promise.resolve([]);
+
+      const [nextTasks, recentSessions] = await Promise.all([
+        nextTasksPromise,
+        recentSessionPromise,
+      ]);
+
       const nextTaskMap = new Map<string, Task>();
-      if (taskIds.length > 0) {
-        const nextTasks = await database
-          .select()
-          .from(tasks)
-          .where(inArray(tasks.id, taskIds));
-        for (const t of nextTasks) {
-          nextTaskMap.set(t.id, t);
-        }
+      for (const t of nextTasks) {
+        nextTaskMap.set(t.id, t);
       }
 
       for (const row of activeTrackRows) {
@@ -1124,23 +1172,8 @@ export function createSessionService(database: Database): SessionService {
           null;
       }
 
-      if (!selectedTrack && activeTracks.length > 0) {
-        // Query recent session activity among active tracks
-        const [recentSession] = await database
-          .select({ trackId: sessions.trackId })
-          .from(sessions)
-          .where(
-            and(
-              ne(sessions.status, "cancelled"),
-              inArray(
-                sessions.trackId,
-                activeTracks.map((t) => t.track.id),
-              ),
-            ),
-          )
-          .orderBy(desc(sessions.startedAt))
-          .limit(1);
-
+      if (!selectedTrack) {
+        const recentSession = recentSessions[0];
         if (recentSession) {
           selectedTrack =
             activeTracks.find((t) => t.track.id === recentSession.trackId) ??

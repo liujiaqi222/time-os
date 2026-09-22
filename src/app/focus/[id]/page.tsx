@@ -13,13 +13,21 @@ export default async function FocusPage({
 
   if (!(await readWebSession())) redirect("/login");
 
-  const settings = await settingsService.get({ actor: "web" });
+  // Independent reads — run in parallel. The session result is captured so
+  // the redirect order stays the same (setup first, then missing session).
+  const [settings, sessionResult] = await Promise.all([
+    settingsService.get({ actor: "web" }),
+    sessionService.getSession({ actor: "web" }, id).then(
+      (value) => ({ ok: true as const, value }),
+      () => ({ ok: false as const }),
+    ),
+  ]);
   if (!settings.setupCompletedAt) redirect("/setup");
 
   let session;
-  try {
-    session = await sessionService.getSession({ actor: "web" }, id);
-  } catch {
+  if (sessionResult.ok) {
+    session = sessionResult.value;
+  } else {
     redirect("/today");
   }
 

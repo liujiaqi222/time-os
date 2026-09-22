@@ -10,8 +10,11 @@ export default async function ProtectedLayout({
   children: React.ReactNode;
 }) {
   if (!(await readWebSession())) redirect("/login");
-  const settings = await settingsService.get({ actor: "web" });
+  // Independent reads — run in parallel (saves a round trip on every page).
+  const [settings, activeSession] = await Promise.all([
+    settingsService.get({ actor: "web" }),
+    sessionService.getActiveSession({ actor: "web" }),
+  ]);
   if (!settings.setupCompletedAt) redirect("/setup");
-  const activeSession = await sessionService.getActiveSession({ actor: "web" });
   return <AppShell activeSession={activeSession}>{children}</AppShell>;
 }

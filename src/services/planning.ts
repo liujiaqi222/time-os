@@ -68,6 +68,11 @@ export interface PlanningService {
     goalId: string,
     input?: ListInput,
   ): Promise<Page<Track>>;
+  listTracksForGoals(
+    context: AuthenticatedContext,
+    goalIds: string[],
+    input?: ListInput,
+  ): Promise<Map<string, Page<Track>>>;
   getTrack(context: AuthenticatedContext, id: string): Promise<Track>;
   createTrack(
     context: AuthenticatedContext,
@@ -443,6 +448,50 @@ export function createPlanningService(database: Database): PlanningService {
             ? (rows[query.limit - 1]?.id ?? null)
             : null,
       };
+    },
+
+    async listTracksForGoals(context, goalIds, input = {}) {
+      contextUnused(context);
+      const uniqueGoalIds = [...new Set(goalIds)];
+      if (uniqueGoalIds.length === 0) return new Map();
+      const query = parsed(listSchema.safeParse(input));
+      if (query.cursor)
+        invalid("Cursor is not supported when listing tracks across goals.");
+      const status = query.status
+        ? parsed(parentStatusSchema.safeParse(query.status))
+        : undefined;
+      // Single round trip for every goal; each goal gets at most limit + 1
+      // rows so its nextCursor can be computed exactly like listTracks.
+      const rows = await database
+        .select()
+        .from(tracks)
+        .where(
+          and(
+            inArray(tracks.goalId, uniqueGoalIds),
+            ...(status
+              ? [eq(tracks.status, status)]
+              : query.includeArchived
+                ? []
+                : [eq(tracks.status, "active" as const)]),
+          ),
+        )
+        .orderBy(asc(tracks.goalId), asc(tracks.position))
+        .limit(uniqueGoalIds.length * (query.limit + 1));
+
+      const pages = new Map<string, Page<Track>>();
+      for (const goalId of uniqueGoalIds)
+        pages.set(goalId, { items: [], nextCursor: null });
+      for (const row of rows) {
+        const page = pages.get(row.goalId);
+        if (!page || page.items.length >= query.limit) {
+          if (page && page.items.length === query.limit) {
+            page.nextCursor = page.items[query.limit - 1]?.id ?? null;
+          }
+          continue;
+        }
+        page.items.push(row);
+      }
+      return pages;
     },
 
     async getTrack(context, id) {
