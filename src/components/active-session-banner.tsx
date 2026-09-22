@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { ArrowRight, Pause } from "lucide-react";
 
 import type { SessionWithRelations } from "@/services/session";
@@ -10,26 +9,26 @@ import {
   formatTimeDigits,
 } from "@/shared/session-timer";
 import { Button } from "@/components/ui/button";
+import { useCurrentSeconds } from "@/components/use-current-seconds";
 
 export function ActiveSessionBanner({
   session,
 }: {
   session: SessionWithRelations;
 }) {
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    if (session.status !== "active") return;
-
-    const timer = setInterval(() => {
-      setNow(new Date());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [session.status]);
-
-  const elapsed = calculateElapsedSeconds(session, now);
+  const currentSeconds = useCurrentSeconds();
+  const now = currentSeconds === null ? null : new Date(currentSeconds * 1000);
   const isPaused = session.status === "paused";
+
+  // Paused/finished sessions derive elapsed from stored timestamps, which is
+  // identical on server and client. Active sessions need the ticking clock,
+  // so they show a placeholder until mounted.
+  const elapsed =
+    session.status === "active"
+      ? now
+        ? calculateElapsedSeconds(session, now)
+        : null
+      : calculateElapsedSeconds(session);
 
   return (
     <div
@@ -77,7 +76,7 @@ export function ActiveSessionBanner({
 
         <div className="flex items-center gap-3">
           <span className="font-mono text-sm font-semibold text-stone-800 tabular-nums">
-            {formatTimeDigits(elapsed)}
+            {elapsed === null ? "--:--" : formatTimeDigits(elapsed)}
           </span>
           <Button
             size="sm"

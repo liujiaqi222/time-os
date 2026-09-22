@@ -28,6 +28,7 @@ import { isTypingElement } from "@/shared/keyboard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useCurrentSeconds } from "@/components/use-current-seconds";
 import type { Distraction, SessionWithRelations } from "@/services/session";
 import type { SessionOutcome } from "@/shared/schemas/session";
 import {
@@ -46,7 +47,11 @@ export function FocusView({
 }) {
   const router = useRouter();
   const [session, setSession] = useState(initialSession);
-  const [now, setNow] = useState(() => new Date());
+  // Ticking clock for live timers; `null` during SSR/hydration so server and
+  // client render the same output (a live timestamp would differ by the
+  // network delay and break hydration).
+  const currentSeconds = useCurrentSeconds();
+  const now = currentSeconds === null ? null : new Date(currentSeconds * 1000);
 
   // Controls transition
   const [isPending, startTransition] = useTransition();
@@ -84,14 +89,6 @@ export function FocusView({
   const [editingText, setEditingText] = useState("");
   const distractionInputRef = useRef<HTMLInputElement>(null);
   const [distractionError, setDistractionError] = useState<string | null>(null);
-
-  // Live timer interval
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNow(new Date());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Focus trap for modals
   useEffect(() => {
@@ -137,7 +134,15 @@ export function FocusView({
     return () => document.removeEventListener("keydown", handleTrapFocus);
   }, [isReviewOpen, isCancelOpen]);
 
-  const elapsedSeconds = calculateElapsedSeconds(session, now);
+  // Paused/finished sessions derive elapsed from stored timestamps (stable
+  // across server and client). Active sessions tick with `now` and read 0
+  // until mounted, keeping SSR output deterministic.
+  const elapsedSeconds =
+    session.status !== "active"
+      ? calculateElapsedSeconds(session)
+      : now
+        ? calculateElapsedSeconds(session, now)
+        : 0;
   const plannedSeconds = session.plannedMinutes
     ? session.plannedMinutes * 60
     : null;
@@ -649,7 +654,10 @@ export function FocusView({
                 <span className="text-xs text-stone-500">实际专注时长</span>
                 <p className="font-semibold text-stone-900">
                   {formatHumanDuration(
-                    calculateDurationSecondsOnFinish(session, now),
+                    calculateDurationSecondsOnFinish(
+                      session,
+                      now ?? new Date(),
+                    ),
                   )}
                 </p>
               </div>
