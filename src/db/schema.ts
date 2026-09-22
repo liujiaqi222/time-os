@@ -81,14 +81,16 @@ export const tracks = pgTable(
     title: varchar("title", { length: 240 }).notNull(),
     description: text("description"),
     status: trackStatus("status").default("active").notNull(),
-    currentTaskId: uuid("current_task_id").references(
-      (): AnyPgColumn => tasks.id,
-      { onDelete: "restrict" },
-    ),
+    currentTaskId: uuid("current_task_id"),
     position: integer("position").notNull(),
     ...timestamps,
   },
   (table) => [
+    foreignKey({
+      name: "tracks_current_task_track_fk",
+      columns: [table.currentTaskId, table.id],
+      foreignColumns: [tasks.id, tasks.trackId],
+    }),
     check("tracks_position_positive", sql`${table.position} > 0`),
     index("tracks_goal_status_position_idx").on(
       table.goalId,
