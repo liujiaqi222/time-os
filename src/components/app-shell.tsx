@@ -30,7 +30,7 @@ export function AppShell({
           </Link>
           <nav
             aria-label="Primary"
-            className="flex items-center gap-1 overflow-x-auto"
+            className="no-scrollbar -my-1 flex items-center gap-1 overflow-x-auto overflow-y-hidden py-1 sm:my-0 sm:overflow-visible sm:py-0"
           >
             {links.map(({ href, label, icon: Icon }) => (
               <Button
