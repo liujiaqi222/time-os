@@ -40,13 +40,16 @@ export default async function TrackPage({
   const { id } = await params;
   const { view } = await searchParams;
   const showArchived = view === "all";
-  const track = await planningService.getTrack(context, id);
-  const allTasks = (
-    await planningService.listTasks(context, id, {
-      includeArchived: true,
-      limit: 100,
-    })
-  ).items;
+  // Independent reads — run in parallel.
+  const [track, allTasks] = await Promise.all([
+    planningService.getTrack(context, id),
+    planningService
+      .listTasks(context, id, {
+        includeArchived: true,
+        limit: 100,
+      })
+      .then((page) => page.items),
+  ]);
   const visibleTasks = showArchived
     ? allTasks
     : allTasks.filter((task) => task.status !== "archived");

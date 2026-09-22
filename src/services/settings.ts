@@ -35,20 +35,29 @@ export function createSettingsService(database: Database): SettingsService {
   }
 
   async function getSettings(): Promise<AppSettings> {
-    await ensureSettings();
+    // Fast path: one round trip when the row already exists (the common
+    // case). Only fall back to the idempotent insert when it is missing.
     const [settings] = await database
       .select()
       .from(appSettings)
       .where(eq(appSettings.id, SETTINGS_ID))
       .limit(1);
+    if (settings) return settings;
 
-    if (!settings) {
+    await ensureSettings();
+    const [created] = await database
+      .select()
+      .from(appSettings)
+      .where(eq(appSettings.id, SETTINGS_ID))
+      .limit(1);
+
+    if (!created) {
       throw new DomainError(
         "SCHEMA_NOT_READY",
         "App settings could not be initialized. Run database migrations.",
       );
     }
-    return settings;
+    return created;
   }
 
   return {

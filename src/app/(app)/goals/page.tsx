@@ -38,23 +38,22 @@ export default async function GoalsPage({
   const visibleGoals = showAll
     ? allGoals.items
     : allGoals.items.filter((goal) => goal.status === "active");
-  const goalsWithTracks = await Promise.all(
-    visibleGoals.map(async (goal) => {
-      const allTracks = (
-        await planningService.listTracks(context, goal.id, {
-          includeArchived: true,
-          limit: 100,
-        })
-      ).items;
-      return {
-        goal,
-        allTracks,
-        tracks: showAll
-          ? allTracks
-          : allTracks.filter((track) => track.status === "active"),
-      };
-    }),
+  // One batched query for every visible goal instead of one query per goal.
+  const tracksByGoal = await planningService.listTracksForGoals(
+    context,
+    visibleGoals.map((goal) => goal.id),
+    { includeArchived: true, limit: 100 },
   );
+  const goalsWithTracks = visibleGoals.map((goal) => {
+    const allTracks = tracksByGoal.get(goal.id)?.items ?? [];
+    return {
+      goal,
+      allTracks,
+      tracks: showAll
+        ? allTracks
+        : allTracks.filter((track) => track.status === "active"),
+    };
+  });
 
   return (
     <div className="space-y-8">
