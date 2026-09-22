@@ -10,7 +10,6 @@ export const env = createEnv({
   },
   runtimeEnv: {
     DATABASE_URL: process.env.DATABASE_URL,
-    TEST_DATABASE_URL: process.env.TEST_DATABASE_URL,
     TIMEOS_WEB_PASSWORD: process.env.TIMEOS_WEB_PASSWORD,
     TIMEOS_MCP_TOKEN: process.env.TIMEOS_MCP_TOKEN,
     TIMEOS_SESSION_SECRET: process.env.TIMEOS_SESSION_SECRET,

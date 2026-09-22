@@ -10,7 +10,6 @@ const postgresqlUrl = z.url().refine(
 
 export const serverEnvironmentSchema = z.object({
   DATABASE_URL: postgresqlUrl,
-  TEST_DATABASE_URL: postgresqlUrl.optional(),
   TIMEOS_WEB_PASSWORD: z.string().min(12),
   TIMEOS_MCP_TOKEN: z.string().min(32),
   TIMEOS_SESSION_SECRET: z.string().min(32),
