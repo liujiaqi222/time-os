@@ -4,13 +4,13 @@ import { hasValidBearerToken } from "@/auth/secrets";
 import { env } from "@/env";
 import { logger } from "@/lib/logger";
 import { createTimeOsMcpServer } from "@/mcp/server";
-import { planningService, settingsService } from "@/services";
+import { planningService, sessionService, settingsService } from "@/services";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const handler = createMcpHandler(
-  () => createTimeOsMcpServer(settingsService, planningService),
+  () => createTimeOsMcpServer(settingsService, planningService, sessionService),
   {
     onerror(error) {
       logger.error("MCP request failed", { error: error.message });
