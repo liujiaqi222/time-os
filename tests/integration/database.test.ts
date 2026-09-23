@@ -12,6 +12,8 @@ import {
 import * as schema from "@/db/schema";
 import { createSettingsService } from "@/services/settings";
 import { createPlanningService } from "@/services/planning";
+import { createDistractionService } from "@/services/distraction";
+import { createDashboardService } from "@/services/dashboard";
 import { createSessionService } from "@/services/session";
 import { planningContract } from "@/adapters/planning-contract";
 import { sessionContract } from "@/adapters/session-contract";
@@ -35,7 +37,14 @@ const pool = new Pool({ connectionString: databaseUrl, max: 5 });
 const database = drizzle(pool, { schema });
 const settingsService = createSettingsService(database);
 const planningService = createPlanningService(database);
-const sessionService = createSessionService(database);
+const distractionService = createDistractionService(database);
+const sessionService = createSessionService(database, {
+  distractionService,
+});
+const dashboardService = createDashboardService(database, {
+  sessionService,
+  settingsService,
+});
 
 beforeAll(async () => {
   await pool.query("drop schema if exists public cascade");
@@ -130,7 +139,7 @@ describe("planning service", () => {
     });
     expect(
       (
-        (await planningService.getNext(web, track.id)) as
+        (await planningService.getNextForTrack(web, track.id)) as
           typeof schema.tasks.$inferSelect | null
       )?.id,
     ).toBe(first?.id);
@@ -141,7 +150,7 @@ describe("planning service", () => {
     });
     expect(
       (
-        (await planningService.getNext(web, track.id)) as
+        (await planningService.getNextForTrack(web, track.id)) as
           typeof schema.tasks.$inferSelect | null
       )?.id,
     ).toBe(first?.id);
@@ -263,7 +272,7 @@ describe("planning service", () => {
       planningService.completeTask(web, first!.id),
       planningService.setNext(mcp, track.id, third!.id),
     ]);
-    const next = await planningService.getNext(web, track.id);
+    const next = await planningService.getNextForTrack(web, track.id);
     expect(next).toMatchObject({
       id: third!.id,
       trackId: track.id,
@@ -462,14 +471,14 @@ describe("session service and focus execution loop", () => {
     expect(cancelled.endedAt).not.toBeNull();
 
     // Cancelled sessions should be excluded from today stats
-    const dashboard = await sessionService.getDashboard(web);
+    const dashboard = await dashboardService.getDashboard(web);
     const cancelledSessionFocus = dashboard.todayStats.totalFocusSeconds;
     // Start and immediately cancel a new session, verify stats don't increase
     const tempSession = await sessionService.startSession(web, {
       trackId: track.id,
     });
     await sessionService.cancelSession(web, tempSession.id);
-    const dashboardAfter = await sessionService.getDashboard(web);
+    const dashboardAfter = await dashboardService.getDashboard(web);
     expect(dashboardAfter.todayStats.totalFocusSeconds).toBe(
       cancelledSessionFocus,
     );
@@ -503,7 +512,7 @@ describe("session service and focus execution loop", () => {
     });
 
     // Initially task 1 is Current Next
-    const initialNext = await planningService.getNext(web, track.id);
+    const initialNext = await planningService.getNextForTrack(web, track.id);
     expect((initialNext as { id: string })?.id).toBe(task1!.id);
 
     // Start session on task 1
@@ -525,7 +534,7 @@ describe("session service and focus execution loop", () => {
     // Next task advanced to Task 2!
     expect(result.nextTask?.id).toBe(task2!.id);
 
-    const freshNext = await planningService.getNext(web, track.id);
+    const freshNext = await planningService.getNextForTrack(web, track.id);
     expect((freshNext as { id: string })?.id).toBe(task2!.id);
 
     // Repeated finish review does not double-advance
@@ -595,42 +604,45 @@ describe("session service and focus execution loop", () => {
     expect(withNote.note).toBe("Live thoughts");
 
     // Create distraction defaulting to active session
-    const d1 = await sessionService.createDistraction(web, {
+    const d1 = await distractionService.createDistraction(web, {
       text: "Phone notification",
     });
     expect(d1.sessionId).toBe(session.id);
     expect(d1.text).toBe("Phone notification");
 
     // Create distraction with empty text
-    const d2 = await sessionService.createDistraction(web, {});
+    const d2 = await distractionService.createDistraction(web, {});
     expect(d2.sessionId).toBe(session.id);
     expect(d2.text).toBeNull();
 
     // List distractions
-    const list = await sessionService.listDistractions(web, {
+    const list = await distractionService.listDistractions(web, {
       sessionId: session.id,
     });
     expect(list).toHaveLength(2);
 
     // Update distraction
-    const updatedD1 = await sessionService.updateDistraction(web, d1.id, {
+    const updatedD1 = await distractionService.updateDistraction(web, d1.id, {
       text: "Phone call from boss",
     });
     expect(updatedD1.text).toBe("Phone call from boss");
 
     // Archive distraction
-    const archived = await sessionService.archiveDistraction(web, d1.id);
+    const archived = await distractionService.archiveDistraction(web, d1.id);
     expect(archived.archivedAt).not.toBeNull();
 
     // Default list excludes archived
-    const listExcludingArchived = await sessionService.listDistractions(web, {
-      sessionId: session.id,
-    });
+    const listExcludingArchived = await distractionService.listDistractions(
+      web,
+      {
+        sessionId: session.id,
+      },
+    );
     expect(listExcludingArchived).toHaveLength(1);
     expect(listExcludingArchived[0]?.id).toBe(d2.id);
 
     // Explicit includeArchived: true includes archived
-    const listWithArchived = await sessionService.listDistractions(web, {
+    const listWithArchived = await distractionService.listDistractions(web, {
       sessionId: session.id,
       includeArchived: true,
     });
@@ -647,9 +659,9 @@ describe("session service and focus execution loop", () => {
     });
 
     // Explicitly set selectedTrack
-    await sessionService.setSelectedTrack(web, track.id);
+    await settingsService.setSelectedTrack(web, track.id);
 
-    const dashboard = await sessionService.getDashboard(web);
+    const dashboard = await dashboardService.getDashboard(web);
     expect(dashboard.selectedTrack?.track.id).toBe(track.id);
     expect(dashboard.selectedTrack?.currentNextTask?.title).toBe(
       "Dashboard Task",
@@ -666,11 +678,13 @@ describe("session service and focus execution loop", () => {
     });
 
     // Verify MCP Server instance registers session tools
-    const server = createTimeOsMcpServer(
+    const server = createTimeOsMcpServer({
       settingsService,
       planningService,
       sessionService,
-    );
+      distractionService,
+      dashboardService,
+    });
     expect(server).toBeDefined();
 
     // Start session via sessionContract
@@ -696,7 +710,7 @@ describe("session service and focus execution loop", () => {
 
     // Log distraction via MCP contract
     const distResult = await sessionContract(() =>
-      sessionService.createDistraction(mcp, {
+      distractionService.createDistraction(mcp, {
         sessionId,
         text: "Urgent Slack",
       }),
@@ -719,7 +733,7 @@ describe("session service and focus execution loop", () => {
 
     // Dashboard get via MCP contract
     const dashResult = await sessionContract(() =>
-      sessionService.getDashboard(mcp),
+      dashboardService.getDashboard(mcp),
     );
     expect(dashResult.ok).toBe(true);
     if (dashResult.ok) {

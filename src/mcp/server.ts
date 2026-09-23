@@ -8,6 +8,8 @@ import {
 } from "@/adapters/settings-contract";
 import { planningContract } from "@/adapters/planning-contract";
 import { sessionContract } from "@/adapters/session-contract";
+import type { DashboardService } from "@/services/dashboard";
+import type { DistractionService } from "@/services/distraction";
 import type { PlanningService } from "@/services/planning";
 import type { SessionService } from "@/services/session";
 import type { SettingsService } from "@/services/settings";
@@ -39,11 +41,20 @@ function toolResult(result: object, error?: string) {
   };
 }
 
-export function createTimeOsMcpServer(
-  settingsService: SettingsService,
-  planningService: PlanningService,
-  sessionService?: SessionService,
-) {
+export function createTimeOsMcpServer(deps: {
+  settingsService: SettingsService;
+  planningService: PlanningService;
+  sessionService: SessionService;
+  distractionService: DistractionService;
+  dashboardService: DashboardService;
+}) {
+  const {
+    settingsService,
+    planningService,
+    sessionService,
+    distractionService,
+    dashboardService,
+  } = deps;
   const server = new McpServer({ name: "time-os", version: "0.1.0" });
 
   server.registerTool(
@@ -302,7 +313,9 @@ export function createTimeOsMcpServer(
       inputSchema: z.object({ trackId: z.string().uuid().optional() }),
     },
     (input: { trackId?: string }) =>
-      planningService.getNext(context, input.trackId),
+      input.trackId
+        ? planningService.getNextForTrack(context, input.trackId)
+        : planningService.getNextForAllTracks(context),
   );
   planningTool(
     "next_set",
@@ -319,178 +332,176 @@ export function createTimeOsMcpServer(
       planningService.setNext(context, input.trackId, input.taskId),
   );
 
-  if (sessionService) {
-    const sessionTool = <T extends object>(
-      name: string,
-      options: {
-        title: string;
-        description: string;
-        inputSchema: z.ZodType;
-      },
-      operation: (input: T) => Promise<unknown>,
-    ) => {
-      server.registerTool(name, options, async (input) => {
-        const result = await sessionContract(() => operation(input as T));
-        return toolResult(
-          result,
-          result.ok ? undefined : errorMessage(result.error),
-        );
-      });
-    };
+  // Session, Distraction and Dashboard all expose the same adapter shape:
+  // domain error in, structured Result out.
+  const sessionTool = <T extends object>(
+    name: string,
+    options: {
+      title: string;
+      description: string;
+      inputSchema: z.ZodType;
+    },
+    operation: (input: T) => Promise<unknown>,
+  ) => {
+    server.registerTool(name, options, async (input) => {
+      const result = await sessionContract(() => operation(input as T));
+      return toolResult(
+        result,
+        result.ok ? undefined : errorMessage(result.error),
+      );
+    });
+  };
 
-    sessionTool(
-      "dashboard_get",
-      {
-        title: "Get dashboard",
-        description:
-          "Read real-time today focus statistics, active session, selected focus track, and all active tracks with their current next task.",
-        inputSchema: z.object({
-          manualTrackId: z.string().uuid().optional(),
-        }),
-      },
-      (input) => sessionService.getDashboard(context, input),
-    );
+  sessionTool(
+    "dashboard_get",
+    {
+      title: "Get dashboard",
+      description:
+        "Read real-time today focus statistics, active session, selected focus track, and all active tracks with their current next task.",
+      inputSchema: z.object({
+        manualTrackId: z.string().uuid().optional(),
+      }),
+    },
+    (input) => dashboardService.getDashboard(context, input),
+  );
 
-    sessionTool(
-      "session_get_active",
-      {
-        title: "Get active session",
-        description:
-          "Read the single active or paused Session, or return null if none is running.",
-        inputSchema: z.object({}),
-      },
-      () => sessionService.getActiveSession(context),
-    );
+  sessionTool(
+    "session_get_active",
+    {
+      title: "Get active session",
+      description:
+        "Read the single active or paused Session, or return null if none is running.",
+      inputSchema: z.object({}),
+    },
+    () => sessionService.getActiveSession(context),
+  );
 
-    sessionTool(
-      "session_get",
-      {
-        title: "Get session",
-        description:
-          "Read complete Session details including Track, optional Task, and active Distractions.",
-        inputSchema: z.object({ id: z.string().uuid() }),
-      },
-      (input: { id: string }) => sessionService.getSession(context, input.id),
-    );
+  sessionTool(
+    "session_get",
+    {
+      title: "Get session",
+      description:
+        "Read complete Session details including Track, optional Task, and active Distractions.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+    },
+    (input: { id: string }) => sessionService.getSession(context, input.id),
+  );
 
-    sessionTool(
-      "session_start",
-      {
-        title: "Start session",
-        description:
-          "Start a focus timer for a Track, optionally linked to a pending Task. Fails if another session is already active or paused.",
-        inputSchema: sessionStartSchema,
-      },
-      (input: z.input<typeof sessionStartSchema>) =>
-        sessionService.startSession(context, input),
-    );
+  sessionTool(
+    "session_start",
+    {
+      title: "Start session",
+      description:
+        "Start a focus timer for a Track, optionally linked to a pending Task. Fails if another session is already active or paused.",
+      inputSchema: sessionStartSchema,
+    },
+    (input: z.input<typeof sessionStartSchema>) =>
+      sessionService.startSession(context, input),
+  );
 
-    sessionTool(
-      "session_pause",
-      {
-        title: "Pause session",
-        description:
-          "Pause a currently active focus session. Idempotent if already paused.",
-        inputSchema: z.object({ id: z.string().uuid() }),
-      },
-      (input: { id: string }) => sessionService.pauseSession(context, input.id),
-    );
+  sessionTool(
+    "session_pause",
+    {
+      title: "Pause session",
+      description:
+        "Pause a currently active focus session. Idempotent if already paused.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+    },
+    (input: { id: string }) => sessionService.pauseSession(context, input.id),
+  );
 
-    sessionTool(
-      "session_resume",
-      {
-        title: "Resume session",
-        description:
-          "Resume a paused focus session. Idempotent if already active.",
-        inputSchema: z.object({ id: z.string().uuid() }),
-      },
-      (input: { id: string }) =>
-        sessionService.resumeSession(context, input.id),
-    );
+  sessionTool(
+    "session_resume",
+    {
+      title: "Resume session",
+      description:
+        "Resume a paused focus session. Idempotent if already active.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+    },
+    (input: { id: string }) => sessionService.resumeSession(context, input.id),
+  );
 
-    sessionTool(
-      "session_finish",
-      {
-        title: "Finish session",
-        description:
-          "Finish a focus session, optionally reviewing and advancing the associated Task (continue_later, completed, or skip) atomically.",
-        inputSchema: sessionFinishSchema,
-      },
-      (input: z.input<typeof sessionFinishSchema>) => {
-        if (input.outcome) {
-          return sessionService.finishSessionReview(context, {
-            sessionId: input.id,
-            note: input.note,
-            outcome: input.outcome,
-          });
-        }
-        return sessionService.finishSession(context, input.id, {
+  sessionTool(
+    "session_finish",
+    {
+      title: "Finish session",
+      description:
+        "Finish a focus session, optionally reviewing and advancing the associated Task (continue_later, completed, or skip) atomically.",
+      inputSchema: sessionFinishSchema,
+    },
+    (input: z.input<typeof sessionFinishSchema>) => {
+      if (input.outcome) {
+        return sessionService.finishSessionReview(context, {
+          sessionId: input.id,
           note: input.note,
+          outcome: input.outcome,
         });
-      },
-    );
+      }
+      return sessionService.finishSession(context, input.id, {
+        note: input.note,
+      });
+    },
+  );
 
-    sessionTool(
-      "session_cancel",
-      {
-        title: "Cancel session",
-        description:
-          "Cancel an active or paused session. Excluded from default history and stats; releases the active session lock.",
-        inputSchema: z.object({ id: z.string().uuid() }),
-      },
-      (input: { id: string }) =>
-        sessionService.cancelSession(context, input.id),
-    );
+  sessionTool(
+    "session_cancel",
+    {
+      title: "Cancel session",
+      description:
+        "Cancel an active or paused session. Excluded from default history and stats; releases the active session lock.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+    },
+    (input: { id: string }) => sessionService.cancelSession(context, input.id),
+  );
 
-    sessionTool(
-      "distractions_list",
-      {
-        title: "List distractions",
-        description:
-          "List distractions logged for a session (defaults to the currently active or paused session).",
-        inputSchema: distractionListSchema,
-      },
-      (input: z.input<typeof distractionListSchema>) =>
-        sessionService.listDistractions(context, input),
-    );
+  sessionTool(
+    "distractions_list",
+    {
+      title: "List distractions",
+      description:
+        "List distractions logged for a session (defaults to the currently active or paused session).",
+      inputSchema: distractionListSchema,
+    },
+    (input: z.input<typeof distractionListSchema>) =>
+      distractionService.listDistractions(context, input),
+  );
 
-    sessionTool(
-      "distraction_log",
-      {
-        title: "Log distraction",
-        description:
-          "Record a quick distraction during a focus session (defaults to the currently active or paused session).",
-        inputSchema: distractionCreateSchema,
-      },
-      (input: z.input<typeof distractionCreateSchema>) =>
-        sessionService.createDistraction(context, input),
-    );
+  sessionTool(
+    "distraction_log",
+    {
+      title: "Log distraction",
+      description:
+        "Record a quick distraction during a focus session (defaults to the currently active or paused session).",
+      inputSchema: distractionCreateSchema,
+    },
+    (input: z.input<typeof distractionCreateSchema>) =>
+      distractionService.createDistraction(context, input),
+  );
 
-    sessionTool(
-      "distraction_update",
-      {
-        title: "Update distraction",
-        description: "Edit the text content of a distraction note.",
-        inputSchema: distractionUpdateSchema,
-      },
-      (input: z.input<typeof distractionUpdateSchema>) =>
-        sessionService.updateDistraction(context, input.id, {
-          text: input.text,
-        }),
-    );
+  sessionTool(
+    "distraction_update",
+    {
+      title: "Update distraction",
+      description: "Edit the text content of a distraction note.",
+      inputSchema: distractionUpdateSchema,
+    },
+    (input: z.input<typeof distractionUpdateSchema>) =>
+      distractionService.updateDistraction(context, input.id, {
+        text: input.text,
+      }),
+  );
 
-    sessionTool(
-      "distraction_archive",
-      {
-        title: "Archive distraction",
-        description:
-          "Soft-archive a distraction note so it is hidden from default view.",
-        inputSchema: z.object({ id: z.string().uuid() }),
-      },
-      (input: { id: string }) =>
-        sessionService.archiveDistraction(context, input.id),
-    );
-  }
+  sessionTool(
+    "distraction_archive",
+    {
+      title: "Archive distraction",
+      description:
+        "Soft-archive a distraction note so it is hidden from default view.",
+      inputSchema: z.object({ id: z.string().uuid() }),
+    },
+    (input: { id: string }) =>
+      distractionService.archiveDistraction(context, input.id),
+  );
 
   return server;
 }

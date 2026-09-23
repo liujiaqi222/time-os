@@ -5,14 +5,18 @@ import { redirect } from "next/navigation";
 
 import { sessionContract } from "@/adapters/session-contract";
 import { readWebSession } from "@/auth/web-session";
-import { sessionService } from "@/services";
+import {
+  distractionService,
+  sessionService,
+  settingsService,
+} from "@/services";
 import type { Result } from "@/shared/result";
 import type {
-  Distraction,
   Session,
   SessionReviewResult,
   SessionWithRelations,
 } from "@/services/session";
+import type { Distraction } from "@/services/distraction";
 import type {
   DistractionCreateInput,
   DistractionUpdateInput,
@@ -84,26 +88,26 @@ export async function updateSessionNoteAction(
 export async function createDistractionAction(
   input: DistractionCreateInput,
 ): Promise<Result<Distraction>> {
-  return run(() => sessionService.createDistraction(context, input));
+  return run(() => distractionService.createDistraction(context, input));
 }
 
 export async function updateDistractionAction(
   id: string,
   input: DistractionUpdateInput,
 ): Promise<Result<Distraction>> {
-  return run(() => sessionService.updateDistraction(context, id, input));
+  return run(() => distractionService.updateDistraction(context, id, input));
 }
 
 export async function archiveDistractionAction(
   id: string,
 ): Promise<Result<Distraction>> {
-  return run(() => sessionService.archiveDistraction(context, id));
+  return run(() => distractionService.archiveDistraction(context, id));
 }
 
 export async function setSelectedTrackAction(
   trackId: string | null,
 ): Promise<Result<void>> {
-  return run(() => sessionService.setSelectedTrack(context, trackId));
+  return run(() => settingsService.setSelectedTrack(context, trackId));
 }
 
 export async function getActiveSessionAction(): Promise<
