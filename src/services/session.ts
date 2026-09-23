@@ -1,35 +1,11 @@
-import { createHash } from "node:crypto";
-
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  gt,
-  inArray,
-  isNotNull,
-  isNull,
-  ne,
-  sql,
-} from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
-import {
-  appSettings,
-  distractions,
-  goals,
-  idempotencyRecords,
-  sessions,
-  tasks,
-  tracks,
-} from "@/db/schema";
+import { goals, sessions, tasks, tracks } from "@/db/schema";
+import type { Distraction, Session, Task, Track } from "@/db/schema";
 import { DomainError } from "@/shared/domain-error";
 import {
-  distractionArchiveSchema,
-  distractionCreateSchema,
-  distractionListSchema,
-  distractionUpdateInputSchema,
   sessionCancelSchema,
   sessionFinishInputSchema,
   sessionNoteUpdateSchema,
@@ -37,21 +13,22 @@ import {
   sessionResumeSchema,
   sessionReviewSchema,
   sessionStartSchema,
-  type DistractionCreateInput,
-  type DistractionListInput,
-  type DistractionUpdateInput,
   type SessionFinishInput,
   type SessionReviewInput,
   type SessionStartInput,
 } from "@/shared/schemas/session";
 import { calculateDurationSecondsOnFinish } from "@/shared/session-timer";
-import { getLocalDayRange } from "@/shared/timezone";
+import { currentNextForTrack, transitionTask } from "@/services/current-next";
+import type { DistractionService } from "@/services/distraction";
+import { requestHashOf, withIdempotency } from "@/services/idempotency";
+import {
+  invalid,
+  lockScope,
+  parsed,
+  type Transaction,
+} from "@/services/service-kit";
 
-export type Session = typeof sessions.$inferSelect;
-export type Distraction = typeof distractions.$inferSelect;
-export type Track = typeof tracks.$inferSelect;
-export type Task = typeof tasks.$inferSelect;
-export type Goal = typeof goals.$inferSelect;
+export type { Session } from "@/db/schema";
 
 export interface SessionWithRelations extends Session {
   track: Track;
@@ -59,61 +36,10 @@ export interface SessionWithRelations extends Session {
   distractions?: Distraction[];
 }
 
-export interface TodayStats {
-  totalFocusSeconds: number;
-  completedTasksCount: number;
-  sessionCount: number;
-}
-
-export interface ActiveTrackItem {
-  track: Track;
-  goal: Goal;
-  currentNextTask: Task | null;
-  todayFocusSeconds: number;
-}
-
-export interface DashboardData {
-  activeSession: SessionWithRelations | null;
-  todayStats: TodayStats;
-  selectedTrack: ActiveTrackItem | null;
-  activeTracks: ActiveTrackItem[];
-}
-
 export interface SessionReviewResult {
   session: Session;
   task: Task | null;
   nextTask: Task | null;
-}
-
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-function invalid(message: string, field?: string): never {
-  throw new DomainError(
-    "INVALID_INPUT",
-    message,
-    field ? { field } : undefined,
-  );
-}
-
-function parsed<T>(
-  result:
-    | { success: true; data: T }
-    | {
-        success: false;
-        error: { issues: Array<{ message: string; path: PropertyKey[] }> };
-      },
-): T {
-  if (!result.success) {
-    invalid(
-      result.error.issues[0]?.message ?? "Invalid input.",
-      result.error.issues[0]?.path.join("."),
-    );
-  }
-  return result.data;
-}
-
-async function lockScope(tx: Transaction, scope: string): Promise<void> {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${scope}))`);
 }
 
 export interface SessionService {
@@ -145,35 +71,13 @@ export interface SessionService {
     id: string,
     note: string | null,
   ): Promise<Session>;
-  createDistraction(
-    context: AuthenticatedContext,
-    input: DistractionCreateInput,
-  ): Promise<Distraction>;
-  listDistractions(
-    context: AuthenticatedContext,
-    input?: DistractionListInput,
-  ): Promise<Distraction[]>;
-  updateDistraction(
-    context: AuthenticatedContext,
-    id: string,
-    input: DistractionUpdateInput,
-  ): Promise<Distraction>;
-  archiveDistraction(
-    context: AuthenticatedContext,
-    id: string,
-  ): Promise<Distraction>;
-  getDashboard(
-    context: AuthenticatedContext,
-    options?: { manualTrackId?: string },
-  ): Promise<DashboardData>;
-  setSelectedTrack(
-    context: AuthenticatedContext,
-    trackId: string | null,
-  ): Promise<void>;
 }
 
-export function createSessionService(database: Database): SessionService {
-  const contextUnused = (_context: AuthenticatedContext) => void _context;
+export function createSessionService(
+  database: Database,
+  deps: { distractionService: Pick<DistractionService, "listDistractions"> },
+): SessionService {
+  const { distractionService } = deps;
 
   async function findActiveSessionRow(
     tx: Database | Transaction,
@@ -200,15 +104,16 @@ export function createSessionService(database: Database): SessionService {
 
   return {
     async getActiveSession(context) {
-      contextUnused(context);
+      void context;
       return findActiveSessionRow(database);
     },
 
     async getSession(context, id) {
-      contextUnused(context);
       if (!id) invalid("Session ID is required.", "id");
 
-      // Independent reads — run in parallel (saves a round trip).
+      // Independent reads — run in parallel (saves a round trip). The
+      // Distraction module owns the distraction query; this composite read
+      // composes its interface instead of re-querying the table.
       const [rows, distractionRows] = await Promise.all([
         database
           .select({
@@ -221,16 +126,7 @@ export function createSessionService(database: Database): SessionService {
           .leftJoin(tasks, eq(sessions.taskId, tasks.id))
           .where(eq(sessions.id, id))
           .limit(1),
-        database
-          .select()
-          .from(distractions)
-          .where(
-            and(
-              eq(distractions.sessionId, id),
-              isNull(distractions.archivedAt),
-            ),
-          )
-          .orderBy(asc(distractions.createdAt)),
+        distractionService.listDistractions(context, { sessionId: id }),
       ]);
 
       if (!rows.length || !rows[0]) {
@@ -249,168 +145,143 @@ export function createSessionService(database: Database): SessionService {
 
     async startSession(context, input) {
       const value = parsed(sessionStartSchema.safeParse(input));
-      const requestHash = createHash("sha256")
-        .update(
-          JSON.stringify({
-            trackId: value.trackId,
-            taskId: value.taskId ?? null,
-            plannedMinutes: value.plannedMinutes ?? null,
-          }),
-        )
-        .digest("hex");
+      const requestHash = requestHashOf({
+        trackId: value.trackId,
+        taskId: value.taskId ?? null,
+        plannedMinutes: value.plannedMinutes ?? null,
+      });
 
       return database.transaction(async (tx) => {
         await lockScope(tx, "sessions:running");
 
-        // 1. Idempotency check FIRST
-        if (value.idempotencyKey) {
-          const [record] = await tx
-            .select()
-            .from(idempotencyRecords)
-            .where(
-              and(
-                eq(idempotencyRecords.operation, "session_start"),
-                eq(idempotencyRecords.key, value.idempotencyKey),
-              ),
-            )
-            .limit(1);
+        // Claim / replay / record discipline lives in the idempotency
+        // module — the same implementation tasks_create uses and
+        // session_log will reuse (PRD §4.7).
+        return withIdempotency({
+          tx,
+          operation: "session_start",
+          key: value.idempotencyKey,
+          requestHash,
+          replay: async (recorded) => {
+            const existingSessionId = (
+              recorded as { sessionId?: string } | null
+            )?.sessionId;
+            if (!existingSessionId) return null;
+            const [session] = await tx
+              .select()
+              .from(sessions)
+              .where(eq(sessions.id, existingSessionId))
+              .limit(1);
+            return session ?? null;
+          },
+          run: async () => {
+            // Check if an active or paused session already exists
+            const [existingRunning] = await tx
+              .select({ id: sessions.id })
+              .from(sessions)
+              .where(inArray(sessions.status, ["active", "paused"] as const))
+              .limit(1);
 
-          if (record) {
-            if (record.requestHash !== requestHash) {
+            if (existingRunning) {
               throw new DomainError(
-                "IDEMPOTENCY_KEY_REUSED",
-                "This idempotency key was already used with a different payload.",
+                "ACTIVE_SESSION_EXISTS",
+                "An active or paused session already exists.",
+                { sessionId: existingRunning.id },
               );
             }
 
-            const existingSessionId = (
-              record.result as { sessionId?: string } | null
-            )?.sessionId;
-            if (existingSessionId) {
-              const [session] = await tx
-                .select()
-                .from(sessions)
-                .where(eq(sessions.id, existingSessionId))
-                .limit(1);
-              if (session) return session;
+            // Validate Track and its parent Goal
+            const [trackWithGoal] = await tx
+              .select({
+                track: tracks,
+                goalStatus: goals.status,
+              })
+              .from(tracks)
+              .innerJoin(goals, eq(tracks.goalId, goals.id))
+              .where(eq(tracks.id, value.trackId))
+              .limit(1);
+
+            if (!trackWithGoal) {
+              throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
+                trackId: value.trackId,
+              });
             }
-          }
-        }
 
-        // 2. Check if an active or paused session already exists
-        const [existingRunning] = await tx
-          .select({ id: sessions.id })
-          .from(sessions)
-          .where(inArray(sessions.status, ["active", "paused"] as const))
-          .limit(1);
+            if (trackWithGoal.goalStatus !== "active") {
+              throw new DomainError(
+                "GOAL_NOT_ACTIVE",
+                "Cannot start a session under an inactive Goal.",
+              );
+            }
 
-        if (existingRunning) {
-          throw new DomainError(
-            "ACTIVE_SESSION_EXISTS",
-            "An active or paused session already exists.",
-            { sessionId: existingRunning.id },
-          );
-        }
+            if (trackWithGoal.track.status !== "active") {
+              throw new DomainError(
+                "TRACK_NOT_ACTIVE",
+                "Cannot start a session under an inactive Track.",
+              );
+            }
 
-        // 3. Validate Track and its parent Goal
-        const [trackWithGoal] = await tx
-          .select({
-            track: tracks,
-            goalStatus: goals.status,
-          })
-          .from(tracks)
-          .innerJoin(goals, eq(tracks.goalId, goals.id))
-          .where(eq(tracks.id, value.trackId))
-          .limit(1);
+            // Validate Task if provided
+            if (value.taskId) {
+              const [task] = await tx
+                .select()
+                .from(tasks)
+                .where(eq(tasks.id, value.taskId))
+                .limit(1);
 
-        if (!trackWithGoal) {
-          throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
-            trackId: value.trackId,
-          });
-        }
+              if (!task) {
+                throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
+                  taskId: value.taskId,
+                });
+              }
 
-        if (trackWithGoal.goalStatus !== "active") {
-          throw new DomainError(
-            "GOAL_NOT_ACTIVE",
-            "Cannot start a session under an inactive Goal.",
-          );
-        }
+              if (task.trackId !== value.trackId) {
+                throw new DomainError(
+                  "TASK_NOT_IN_TRACK",
+                  "Task does not belong to the selected Track.",
+                );
+              }
 
-        if (trackWithGoal.track.status !== "active") {
-          throw new DomainError(
-            "TRACK_NOT_ACTIVE",
-            "Cannot start a session under an inactive Track.",
-          );
-        }
+              if (task.status !== "pending") {
+                throw new DomainError(
+                  task.status === "completed"
+                    ? "TASK_ALREADY_COMPLETED"
+                    : "TASK_NOT_PENDING",
+                  "Only pending tasks can be started.",
+                );
+              }
+            }
 
-        // 4. Validate Task if provided
-        if (value.taskId) {
-          const [task] = await tx
-            .select()
-            .from(tasks)
-            .where(eq(tasks.id, value.taskId))
-            .limit(1);
+            const createdVia = context.actor === "mcp" ? "mcp" : "web";
+            const [session] = await tx
+              .insert(sessions)
+              .values({
+                trackId: value.trackId,
+                taskId: value.taskId ?? null,
+                status: "active",
+                entryMode: "timer",
+                createdVia,
+                plannedMinutes: value.plannedMinutes ?? null,
+                startedAt: new Date(),
+                totalPausedSeconds: 0,
+                durationSeconds: null,
+                pausedAt: null,
+                note: null,
+              })
+              .returning();
 
-          if (!task) {
-            throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
-              taskId: value.taskId,
-            });
-          }
-
-          if (task.trackId !== value.trackId) {
-            throw new DomainError(
-              "TASK_NOT_IN_TRACK",
-              "Task does not belong to the selected Track.",
-            );
-          }
-
-          if (task.status !== "pending") {
-            throw new DomainError(
-              task.status === "completed"
-                ? "TASK_ALREADY_COMPLETED"
-                : "TASK_NOT_PENDING",
-              "Only pending tasks can be started.",
-            );
-          }
-        }
-
-        const createdVia = context.actor === "mcp" ? "mcp" : "web";
-        const [session] = await tx
-          .insert(sessions)
-          .values({
-            trackId: value.trackId,
-            taskId: value.taskId ?? null,
-            status: "active",
-            entryMode: "timer",
-            createdVia,
-            plannedMinutes: value.plannedMinutes ?? null,
-            startedAt: new Date(),
-            totalPausedSeconds: 0,
-            durationSeconds: null,
-            pausedAt: null,
-            note: null,
-          })
-          .returning();
-
-        if (value.idempotencyKey) {
-          await tx
-            .insert(idempotencyRecords)
-            .values({
-              operation: "session_start",
-              key: value.idempotencyKey,
-              requestHash,
-              resultRef: session!.id,
+            return {
+              value: session!,
               result: { sessionId: session!.id },
-            })
-            .onConflictDoNothing();
-        }
-
-        return session!;
+              resultRef: session!.id,
+            };
+          },
+        });
       });
     },
 
-    async pauseSession(context, id) {
-      contextUnused(context);
+    async pauseSession(_context, id) {
+      void _context;
       parsed(sessionPauseSchema.safeParse({ id }));
 
       return database.transaction(async (tx) => {
@@ -454,8 +325,8 @@ export function createSessionService(database: Database): SessionService {
       });
     },
 
-    async resumeSession(context, id) {
-      contextUnused(context);
+    async resumeSession(_context, id) {
+      void _context;
       parsed(sessionResumeSchema.safeParse({ id }));
 
       return database.transaction(async (tx) => {
@@ -508,8 +379,8 @@ export function createSessionService(database: Database): SessionService {
       });
     },
 
-    async finishSession(context, id, input) {
-      contextUnused(context);
+    async finishSession(_context, id, input) {
+      void _context;
       if (input) parsed(sessionFinishInputSchema.safeParse(input));
 
       return database.transaction(async (tx) => {
@@ -559,8 +430,8 @@ export function createSessionService(database: Database): SessionService {
       });
     },
 
-    async cancelSession(context, id) {
-      contextUnused(context);
+    async cancelSession(_context, id) {
+      void _context;
       parsed(sessionCancelSchema.safeParse({ id }));
 
       return database.transaction(async (tx) => {
@@ -606,8 +477,8 @@ export function createSessionService(database: Database): SessionService {
       });
     },
 
-    async finishSessionReview(context, input) {
-      contextUnused(context);
+    async finishSessionReview(_context, input) {
+      void _context;
       const value = parsed(sessionReviewSchema.safeParse(input));
 
       return database.transaction(async (tx) => {
@@ -654,22 +525,10 @@ export function createSessionService(database: Database): SessionService {
                   .where(eq(tasks.id, session.taskId))
                   .limit(1)
               : [null];
-            const [track] = await tx
-              .select()
-              .from(tracks)
-              .where(eq(tracks.id, session.trackId))
-              .limit(1);
-            const [nextTask] = track?.currentTaskId
-              ? await tx
-                  .select()
-                  .from(tasks)
-                  .where(eq(tasks.id, track.currentTaskId))
-                  .limit(1)
-              : [null];
             return {
               session,
               task: task ?? null,
-              nextTask: nextTask ?? null,
+              nextTask: await currentNextForTrack(tx, session.trackId),
             };
           }
           // Fall through to process the task outcome on the already-completed session
@@ -691,7 +550,6 @@ export function createSessionService(database: Database): SessionService {
         let updatedTask: Task | null = null;
         let nextTask: Task | null = null;
 
-        // If outcome requires a task
         if (value.outcome === "completed" || value.outcome === "skip") {
           if (!session.taskId) {
             throw new DomainError(
@@ -700,84 +558,18 @@ export function createSessionService(database: Database): SessionService {
             );
           }
 
-          await lockScope(tx, `track:${session.trackId}`);
-
-          const [task] = await tx
-            .select()
-            .from(tasks)
-            .where(eq(tasks.id, session.taskId))
-            .limit(1);
-
-          if (!task) {
-            throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
-              taskId: session.taskId,
-            });
-          }
-
-          if (task.status !== "pending") {
-            throw new DomainError(
-              task.status === "completed"
-                ? "TASK_ALREADY_COMPLETED"
-                : "TASK_NOT_PENDING",
-              "Only pending tasks can be completed or skipped.",
-            );
-          }
-
-          const now = new Date();
-          const targetStatus =
-            value.outcome === "completed" ? "completed" : "skipped";
-
-          const [resTask] = await tx
-            .update(tasks)
-            .set({
-              status: targetStatus,
-              completedAt: value.outcome === "completed" ? now : null,
-              updatedAt: now,
-            })
-            .where(eq(tasks.id, session.taskId))
-            .returning();
-          updatedTask = resTask!;
-
-          // If this was Current Next, advance Next
-          const [track] = await tx
-            .select()
-            .from(tracks)
-            .where(eq(tracks.id, session.trackId))
-            .limit(1);
-
-          if (track?.currentTaskId === session.taskId) {
-            const [nextPending] = await tx
-              .select()
-              .from(tasks)
-              .where(
-                and(
-                  eq(tasks.trackId, session.trackId),
-                  eq(tasks.status, "pending"),
-                  gt(tasks.position, task.position),
-                ),
-              )
-              .orderBy(asc(tasks.position))
-              .limit(1);
-
-            await tx
-              .update(tracks)
-              .set({
-                currentTaskId: nextPending?.id ?? null,
-                updatedAt: now,
-              })
-              .where(eq(tracks.id, session.trackId));
-
-            nextTask = nextPending ?? null;
-          } else if (track?.currentTaskId) {
-            const [current] = await tx
-              .select()
-              .from(tasks)
-              .where(eq(tasks.id, track.currentTaskId))
-              .limit(1);
-            nextTask = current ?? null;
-          }
+          // The CurrentNext module owns the lock discipline, task validation
+          // and pointer advancement — the same implementation Planning
+          // transitions use (PRD §6.3).
+          const transitioned = await transitionTask(
+            tx,
+            session.taskId,
+            value.outcome === "completed" ? "completed" : "skipped",
+          );
+          updatedTask = transitioned.affectedTask;
+          nextTask = transitioned.nextTask;
         } else {
-          // continue_later or no outcome
+          // continue_later or no outcome: leave the task and pointer alone.
           if (session.taskId) {
             const [task] = await tx
               .select()
@@ -786,19 +578,7 @@ export function createSessionService(database: Database): SessionService {
               .limit(1);
             updatedTask = task ?? null;
           }
-          const [track] = await tx
-            .select()
-            .from(tracks)
-            .where(eq(tracks.id, session.trackId))
-            .limit(1);
-          if (track?.currentTaskId) {
-            const [current] = await tx
-              .select()
-              .from(tasks)
-              .where(eq(tasks.id, track.currentTaskId))
-              .limit(1);
-            nextTask = current ?? null;
-          }
+          nextTask = await currentNextForTrack(tx, session.trackId);
         }
 
         const now = new Date();
@@ -845,8 +625,8 @@ export function createSessionService(database: Database): SessionService {
       });
     },
 
-    async updateSessionNote(context, id, note) {
-      contextUnused(context);
+    async updateSessionNote(_context, id, note) {
+      void _context;
       parsed(sessionNoteUpdateSchema.safeParse({ id, note }));
 
       const [existing] = await database
@@ -878,347 +658,6 @@ export function createSessionService(database: Database): SessionService {
         .returning();
 
       return updated!;
-    },
-
-    async createDistraction(context, input) {
-      contextUnused(context);
-      const value = parsed(distractionCreateSchema.safeParse(input));
-
-      let targetSessionId = value.sessionId;
-
-      if (!targetSessionId) {
-        const activeSession = await findActiveSessionRow(database);
-        if (!activeSession) {
-          throw new DomainError(
-            "SESSION_NOT_FOUND",
-            "No active or paused session found.",
-          );
-        }
-        targetSessionId = activeSession.id;
-      } else {
-        const [existing] = await database
-          .select({ id: sessions.id })
-          .from(sessions)
-          .where(eq(sessions.id, targetSessionId))
-          .limit(1);
-        if (!existing) {
-          throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-            sessionId: targetSessionId,
-          });
-        }
-      }
-
-      const [created] = await database
-        .insert(distractions)
-        .values({
-          sessionId: targetSessionId,
-          text: value.text ?? null,
-        })
-        .returning();
-
-      return created!;
-    },
-
-    async listDistractions(context, input = {}) {
-      contextUnused(context);
-      const query = parsed(distractionListSchema.safeParse(input));
-
-      let targetSessionId = query.sessionId;
-      if (!targetSessionId) {
-        const active = await findActiveSessionRow(database);
-        if (!active) {
-          throw new DomainError(
-            "SESSION_NOT_FOUND",
-            "No active or paused session found.",
-          );
-        }
-        targetSessionId = active.id;
-      }
-
-      const conditions = [eq(distractions.sessionId, targetSessionId)];
-      if (!query.includeArchived) {
-        conditions.push(isNull(distractions.archivedAt));
-      }
-
-      return database
-        .select()
-        .from(distractions)
-        .where(and(...conditions))
-        .orderBy(asc(distractions.createdAt));
-    },
-
-    async updateDistraction(context, id, input) {
-      contextUnused(context);
-      const value = parsed(distractionUpdateInputSchema.safeParse(input));
-
-      const [updated] = await database
-        .update(distractions)
-        .set({
-          text: value.text ?? null,
-          updatedAt: new Date(),
-        })
-        .where(eq(distractions.id, id))
-        .returning();
-
-      if (!updated) {
-        throw new DomainError(
-          "DISTRACTION_NOT_FOUND",
-          "Distraction was not found.",
-        );
-      }
-
-      return updated;
-    },
-
-    async archiveDistraction(context, id) {
-      contextUnused(context);
-      parsed(distractionArchiveSchema.safeParse({ id }));
-
-      const [archived] = await database
-        .update(distractions)
-        .set({
-          archivedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(distractions.id, id))
-        .returning();
-
-      if (!archived) {
-        throw new DomainError(
-          "DISTRACTION_NOT_FOUND",
-          "Distraction was not found.",
-        );
-      }
-
-      return archived;
-    },
-
-    async getDashboard(context, options) {
-      contextUnused(context);
-
-      const [settings] = await database
-        .select()
-        .from(appSettings)
-        .where(eq(appSettings.id, "default"))
-        .limit(1);
-
-      const timezone = settings?.timezone ?? "UTC";
-      const now = new Date();
-      const { start: todayStart, end: todayEnd } = getLocalDayRange(
-        now,
-        timezone,
-      );
-
-      // 1-3. Independent queries — run in parallel (each await is a network
-      // round trip, so only `settings` must come first: the others need the
-      // "today" range derived from its timezone).
-      const [
-        activeSession,
-        completedTasksToday,
-        todaySessions,
-        activeTrackRows,
-      ] = await Promise.all([
-        // 1. Active session
-        findActiveSessionRow(database),
-        // 2. Today stats: completed tasks today
-        database
-          .select({ count: sql<number>`count(*)` })
-          .from(tasks)
-          .where(
-            and(
-              eq(tasks.status, "completed"),
-              isNotNull(tasks.completedAt),
-              sql`${tasks.completedAt} >= ${todayStart} and ${tasks.completedAt} <= ${todayEnd}`,
-            ),
-          ),
-        // Non-cancelled sessions intersecting today
-        database
-          .select()
-          .from(sessions)
-          .where(
-            and(
-              ne(sessions.status, "cancelled"),
-              sql`${sessions.startedAt} <= ${todayEnd} and (${sessions.endedAt} is null or ${sessions.endedAt} >= ${todayStart})`,
-            ),
-          ),
-        // 3. Active tracks under active goals
-        database
-          .select({
-            track: tracks,
-            goal: goals,
-          })
-          .from(tracks)
-          .innerJoin(goals, eq(tracks.goalId, goals.id))
-          .where(and(eq(tracks.status, "active"), eq(goals.status, "active")))
-          .orderBy(asc(goals.position), asc(tracks.position)),
-      ]);
-
-      const completedTasksCount = Number(completedTasksToday[0]?.count ?? 0);
-
-      let totalFocusSeconds = 0;
-      const trackSecondsMap = new Map<string, number>();
-
-      for (const s of todaySessions) {
-        let sec = 0;
-        if (s.status === "completed" && s.durationSeconds != null) {
-          // Duration of the session falling within today's range
-          const sStart = new Date(s.startedAt).getTime();
-          const sEnd = s.endedAt
-            ? new Date(s.endedAt).getTime()
-            : now.getTime();
-          const clampedStart = Math.max(sStart, todayStart.getTime());
-          const clampedEnd = Math.min(sEnd, todayEnd.getTime());
-          if (clampedEnd > clampedStart) {
-            const fraction =
-              (clampedEnd - clampedStart) / Math.max(1, sEnd - sStart);
-            sec = Math.round(s.durationSeconds * Math.min(1, fraction));
-          }
-        } else if (s.status === "active" || s.status === "paused") {
-          sec = calculateDurationSecondsOnFinish(s, now);
-        }
-
-        totalFocusSeconds += sec;
-        trackSecondsMap.set(
-          s.trackId,
-          (trackSecondsMap.get(s.trackId) ?? 0) + sec,
-        );
-      }
-
-      const activeTracks: ActiveTrackItem[] = [];
-
-      // Round 3: batch-fetch all current next tasks in a single query instead
-      // of N+1. If the selected track can't be resolved from the request or
-      // settings alone, also fetch the most recent session activity among
-      // active tracks. Both queries run in parallel.
-      const taskIds = activeTrackRows
-        .map((row) => row.track.currentTaskId)
-        .filter((id): id is string => id != null);
-
-      const canSelectWithoutDb =
-        (options?.manualTrackId != null &&
-          activeTrackRows.some(
-            (row) => row.track.id === options.manualTrackId,
-          )) ||
-        (settings?.selectedTrackId != null &&
-          activeTrackRows.some(
-            (row) => row.track.id === settings.selectedTrackId,
-          ));
-      const needsRecentSession =
-        !canSelectWithoutDb && activeTrackRows.length > 0;
-
-      const nextTasksPromise: Promise<Task[]> =
-        taskIds.length > 0
-          ? database.select().from(tasks).where(inArray(tasks.id, taskIds))
-          : Promise.resolve([]);
-
-      const recentSessionPromise: Promise<{ trackId: string }[]> =
-        needsRecentSession
-          ? database
-              .select({ trackId: sessions.trackId })
-              .from(sessions)
-              .where(
-                and(
-                  ne(sessions.status, "cancelled"),
-                  inArray(
-                    sessions.trackId,
-                    activeTrackRows.map((row) => row.track.id),
-                  ),
-                ),
-              )
-              .orderBy(desc(sessions.startedAt))
-              .limit(1)
-          : Promise.resolve([]);
-
-      const [nextTasks, recentSessions] = await Promise.all([
-        nextTasksPromise,
-        recentSessionPromise,
-      ]);
-
-      const nextTaskMap = new Map<string, Task>();
-      for (const t of nextTasks) {
-        nextTaskMap.set(t.id, t);
-      }
-
-      for (const row of activeTrackRows) {
-        const nextTask = row.track.currentTaskId
-          ? (nextTaskMap.get(row.track.currentTaskId) ?? null)
-          : null;
-
-        activeTracks.push({
-          track: row.track,
-          goal: row.goal,
-          currentNextTask: nextTask,
-          todayFocusSeconds: trackSecondsMap.get(row.track.id) ?? 0,
-        });
-      }
-
-      // 4. Current focus track selection fallback:
-      // 0. options?.manualTrackId if valid and active
-      // 1. selectedTrackId if valid and active
-      // 2. Most recent active track with non-cancelled session activity
-      // 3. First active track by Goal.position -> Track.position
-      // 4. null
-      let selectedTrack: ActiveTrackItem | null = null;
-
-      if (options?.manualTrackId) {
-        selectedTrack =
-          activeTracks.find((t) => t.track.id === options.manualTrackId) ??
-          null;
-      }
-
-      if (!selectedTrack && settings?.selectedTrackId) {
-        selectedTrack =
-          activeTracks.find((t) => t.track.id === settings.selectedTrackId) ??
-          null;
-      }
-
-      if (!selectedTrack) {
-        const recentSession = recentSessions[0];
-        if (recentSession) {
-          selectedTrack =
-            activeTracks.find((t) => t.track.id === recentSession.trackId) ??
-            null;
-        }
-      }
-
-      if (!selectedTrack && activeTracks.length > 0) {
-        selectedTrack = activeTracks[0] ?? null;
-      }
-
-      return {
-        activeSession,
-        todayStats: {
-          totalFocusSeconds,
-          completedTasksCount,
-          sessionCount: todaySessions.length,
-        },
-        selectedTrack,
-        activeTracks,
-      };
-    },
-
-    async setSelectedTrack(context, trackId) {
-      contextUnused(context);
-      if (trackId) {
-        const [track] = await database
-          .select({ id: tracks.id })
-          .from(tracks)
-          .where(eq(tracks.id, trackId))
-          .limit(1);
-        if (!track) {
-          throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
-            trackId,
-          });
-        }
-      }
-
-      await database
-        .update(appSettings)
-        .set({
-          selectedTrackId: trackId,
-          updatedAt: new Date(),
-        })
-        .where(eq(appSettings.id, "default"));
     },
   };
 }

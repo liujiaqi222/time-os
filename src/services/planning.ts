@@ -1,15 +1,15 @@
-import { createHash } from "node:crypto";
-
-import { and, asc, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
 import {
   goals,
-  idempotencyRecords,
   sessions,
   tasks,
   tracks,
+  type Goal,
+  type Task,
+  type Track,
 } from "@/db/schema";
 import { DomainError } from "@/shared/domain-error";
 import {
@@ -33,20 +33,31 @@ import {
   type TrackCreateInput,
   type TrackUpdateInput,
 } from "@/shared/schemas/planning";
+import {
+  currentNextForTrack,
+  transitionTask,
+  type TaskTransitionResult,
+} from "@/services/current-next";
+import { requestHashOf, withIdempotency } from "@/services/idempotency";
+import {
+  listPositionPage,
+  renumberPositions,
+  type Page,
+} from "@/services/positioned-list";
+import {
+  invalid,
+  lockScope,
+  parsed,
+  type Transaction,
+} from "@/services/service-kit";
 
-export type Goal = typeof goals.$inferSelect;
-export type Track = typeof tracks.$inferSelect;
-export type Task = typeof tasks.$inferSelect;
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type { Goal, Track, Task } from "@/db/schema";
+export type { TaskTransitionResult } from "@/services/current-next";
+export type { Page } from "@/services/positioned-list";
 
-export interface Page<T> {
-  items: T[];
-  nextCursor: string | null;
-}
-
-export interface TaskTransitionResult {
-  affectedTask: Task;
-  nextTask: Task | null;
+export interface TrackNext {
+  track: Track;
+  task: Task | null;
 }
 
 export interface PlanningService {
@@ -121,44 +132,16 @@ export interface PlanningService {
     context: AuthenticatedContext,
     id: string,
   ): Promise<TaskTransitionResult>;
-  getNext(
+  getNextForTrack(
     context: AuthenticatedContext,
-    trackId?: string,
-  ): Promise<Task | null | Array<{ track: Track; task: Task | null }>>;
+    trackId: string,
+  ): Promise<Task | null>;
+  getNextForAllTracks(context: AuthenticatedContext): Promise<TrackNext[]>;
   setNext(
     context: AuthenticatedContext,
     trackId: string,
     taskId: string | null,
   ): Promise<Task | null>;
-}
-
-function invalid(message: string, field?: string): never {
-  throw new DomainError(
-    "INVALID_INPUT",
-    message,
-    field ? { field } : undefined,
-  );
-}
-
-function parsed<T>(
-  result:
-    | { success: true; data: T }
-    | {
-        success: false;
-        error: { issues: Array<{ message: string; path: PropertyKey[] }> };
-      },
-): T {
-  if (!result.success) {
-    invalid(
-      result.error.issues[0]?.message ?? "Invalid input.",
-      result.error.issues[0]?.path.join("."),
-    );
-  }
-  return result.data;
-}
-
-async function lockScope(tx: Transaction, scope: string): Promise<void> {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${scope}))`);
 }
 
 async function ensureNoRunningSession(
@@ -194,114 +177,18 @@ async function ensureNoRunningSession(
     );
 }
 
-async function assertCompleteOrder(
-  tx: Transaction,
-  table: typeof goals | typeof tracks | typeof tasks,
-  ids: string[],
-  condition?: ReturnType<typeof eq>,
-): Promise<void> {
-  if (new Set(ids).size !== ids.length)
-    throw new DomainError(
-      "INVALID_POSITION_ORDER",
-      "Order contains duplicate IDs.",
-    );
-  const rows = await tx.select({ id: table.id }).from(table).where(condition);
-  const actual = new Set(rows.map((row) => row.id));
-  if (actual.size !== ids.length || ids.some((id) => !actual.has(id))) {
-    throw new DomainError(
-      "INVALID_POSITION_ORDER",
-      "Order must contain every item in the container exactly once.",
-    );
-  }
-}
-
 export function createPlanningService(database: Database): PlanningService {
   const contextUnused = (_context: AuthenticatedContext) => void _context;
 
-  async function currentForTrack(
-    tx: Transaction,
-    trackId: string,
-  ): Promise<Task | null> {
-    const [row] = await tx
-      .select({ task: tasks })
-      .from(tracks)
-      .leftJoin(tasks, eq(tracks.currentTaskId, tasks.id))
-      .where(eq(tracks.id, trackId))
-      .limit(1);
-    return row?.task ?? null;
-  }
-
+  // Task transitions and Current Next advancement live in the current-next
+  // module — the same implementation the Session finish review uses
+  // (PRD §6.3). This module only owns the transaction boundary.
   async function transition(
     id: string,
     status: "completed" | "skipped" | "archived",
   ): Promise<TaskTransitionResult> {
     parsed(taskTransitionSchema.safeParse({ id }));
-    return database.transaction(async (tx) => {
-      const [existing] = await tx
-        .select()
-        .from(tasks)
-        .where(eq(tasks.id, id))
-        .limit(1);
-      if (!existing)
-        throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
-          taskId: id,
-        });
-      await lockScope(tx, `track:${existing.trackId}`);
-      const [fresh] = await tx
-        .select()
-        .from(tasks)
-        .where(eq(tasks.id, id))
-        .limit(1);
-      if (!fresh)
-        throw new DomainError("TASK_NOT_FOUND", "Task was not found.");
-      if (fresh.status !== "pending") {
-        throw new DomainError(
-          fresh.status === "completed"
-            ? "TASK_ALREADY_COMPLETED"
-            : "TASK_NOT_PENDING",
-          "Only a pending task can change to this status.",
-        );
-      }
-      const [track] = await tx
-        .select()
-        .from(tracks)
-        .where(eq(tracks.id, fresh.trackId))
-        .limit(1);
-      const [affectedTask] = await tx
-        .update(tasks)
-        .set({
-          status,
-          completedAt: status === "completed" ? new Date() : null,
-          updatedAt: new Date(),
-        })
-        .where(eq(tasks.id, id))
-        .returning();
-      if (!affectedTask)
-        throw new DomainError("TASK_NOT_FOUND", "Task was not found.");
-
-      let nextTask = track?.currentTaskId
-        ? await currentForTrack(tx, fresh.trackId)
-        : null;
-      if (track?.currentTaskId === id) {
-        [nextTask] = await tx
-          .select()
-          .from(tasks)
-          .where(
-            and(
-              eq(tasks.trackId, fresh.trackId),
-              eq(tasks.status, "pending"),
-              gt(tasks.position, fresh.position),
-            ),
-          )
-          .orderBy(asc(tasks.position))
-          .limit(1);
-        await tx
-          .update(tracks)
-          .set({ currentTaskId: nextTask?.id ?? null, updatedAt: new Date() })
-          .where(eq(tracks.id, fresh.trackId));
-      }
-      return { affectedTask, nextTask: nextTask ?? null };
-    });
+    return database.transaction((tx) => transitionTask(tx, id, status));
   }
 
   return {
@@ -311,34 +198,17 @@ export function createPlanningService(database: Database): PlanningService {
       const status = query.status
         ? parsed(parentStatusSchema.safeParse(query.status))
         : undefined;
-      const conditions = [
-        ...(status
-          ? [eq(goals.status, status)]
-          : query.includeArchived
-            ? []
-            : [eq(goals.status, "active" as const)]),
-      ];
-      if (query.cursor) {
-        const [cursor] = await database
-          .select({ position: goals.position })
-          .from(goals)
-          .where(eq(goals.id, query.cursor))
-          .limit(1);
-        if (cursor) conditions.push(gt(goals.position, cursor.position));
-      }
-      const rows = await database
-        .select()
-        .from(goals)
-        .where(conditions.length ? and(...conditions) : undefined)
-        .orderBy(asc(goals.position))
-        .limit(query.limit + 1);
-      return {
-        items: rows.slice(0, query.limit),
-        nextCursor:
-          rows.length > query.limit
-            ? (rows[query.limit - 1]?.id ?? null)
-            : null,
-      };
+      return listPositionPage(database, goals, {
+        filters: [
+          ...(status
+            ? [eq(goals.status, status)]
+            : query.includeArchived
+              ? []
+              : [eq(goals.status, "active" as const)]),
+        ],
+        cursor: query.cursor,
+        limit: query.limit,
+      });
     },
 
     async createGoal(context, input) {
@@ -397,18 +267,7 @@ export function createPlanningService(database: Database): PlanningService {
       const value = parsed(reorderSchema.safeParse({ ids }));
       return database.transaction(async (tx) => {
         await lockScope(tx, "goals:order");
-        await assertCompleteOrder(tx, goals, value.ids);
-        const offset = value.ids.length + 10_000;
-        for (const [index, id] of value.ids.entries())
-          await tx
-            .update(goals)
-            .set({ position: offset + index, updatedAt: new Date() })
-            .where(eq(goals.id, id));
-        for (const [index, id] of value.ids.entries())
-          await tx
-            .update(goals)
-            .set({ position: index + 1, updatedAt: new Date() })
-            .where(eq(goals.id, id));
+        await renumberPositions(tx, goals, value.ids);
         return tx.select().from(goals).orderBy(asc(goals.position));
       });
     },
@@ -419,35 +278,18 @@ export function createPlanningService(database: Database): PlanningService {
       const status = query.status
         ? parsed(parentStatusSchema.safeParse(query.status))
         : undefined;
-      const conditions = [
-        eq(tracks.goalId, goalId),
-        ...(status
-          ? [eq(tracks.status, status)]
-          : query.includeArchived
-            ? []
-            : [eq(tracks.status, "active" as const)]),
-      ];
-      if (query.cursor) {
-        const [cursor] = await database
-          .select({ position: tracks.position })
-          .from(tracks)
-          .where(and(eq(tracks.id, query.cursor), eq(tracks.goalId, goalId)))
-          .limit(1);
-        if (cursor) conditions.push(gt(tracks.position, cursor.position));
-      }
-      const rows = await database
-        .select()
-        .from(tracks)
-        .where(and(...conditions))
-        .orderBy(asc(tracks.position))
-        .limit(query.limit + 1);
-      return {
-        items: rows.slice(0, query.limit),
-        nextCursor:
-          rows.length > query.limit
-            ? (rows[query.limit - 1]?.id ?? null)
-            : null,
-      };
+      return listPositionPage(database, tracks, {
+        scope: [eq(tracks.goalId, goalId)],
+        filters: [
+          ...(status
+            ? [eq(tracks.status, status)]
+            : query.includeArchived
+              ? []
+              : [eq(tracks.status, "active" as const)]),
+        ],
+        cursor: query.cursor,
+        limit: query.limit,
+      });
     },
 
     async listTracksForGoals(context, goalIds, input = {}) {
@@ -574,29 +416,12 @@ export function createPlanningService(database: Database): PlanningService {
       const value = parsed(reorderSchema.safeParse({ parentId: goalId, ids }));
       return database.transaction(async (tx) => {
         await lockScope(tx, `tracks:${goalId}`);
-        await assertCompleteOrder(
+        await renumberPositions(
           tx,
           tracks,
           value.ids,
           eq(tracks.goalId, goalId),
         );
-        const [max] = await tx
-          .select({ value: sql<number>`coalesce(max(${tracks.position}), 0)` })
-          .from(tracks)
-          .where(eq(tracks.goalId, goalId));
-        for (const [index, id] of value.ids.entries())
-          await tx
-            .update(tracks)
-            .set({
-              position: Number(max?.value ?? 0) + index + 1,
-              updatedAt: new Date(),
-            })
-            .where(eq(tracks.id, id));
-        for (const [index, id] of value.ids.entries())
-          await tx
-            .update(tracks)
-            .set({ position: index + 1, updatedAt: new Date() })
-            .where(eq(tracks.id, id));
         return tx
           .select()
           .from(tracks)
@@ -611,43 +436,27 @@ export function createPlanningService(database: Database): PlanningService {
       const status = query.status
         ? parsed(taskStatusSchema.safeParse(query.status))
         : undefined;
-      const conditions = [
-        eq(tasks.trackId, trackId),
-        ...(status
-          ? [eq(tasks.status, status)]
-          : query.includeArchived
-            ? []
-            : [ne(tasks.status, "archived" as const)]),
-      ];
-      if (query.cursor) {
-        const [cursor] = await database
-          .select({ position: tasks.position })
-          .from(tasks)
-          .where(and(eq(tasks.id, query.cursor), eq(tasks.trackId, trackId)))
-          .limit(1);
-        if (cursor) conditions.push(gt(tasks.position, cursor.position));
-      }
-      const rows = await database
-        .select()
-        .from(tasks)
-        .where(and(...conditions))
-        .orderBy(asc(tasks.position))
-        .limit(query.limit + 1);
-      return {
-        items: rows.slice(0, query.limit),
-        nextCursor:
-          rows.length > query.limit
-            ? (rows[query.limit - 1]?.id ?? null)
-            : null,
-      };
+      return listPositionPage(database, tasks, {
+        scope: [eq(tasks.trackId, trackId)],
+        filters: [
+          ...(status
+            ? [eq(tasks.status, status)]
+            : query.includeArchived
+              ? []
+              : [ne(tasks.status, "archived" as const)]),
+        ],
+        cursor: query.cursor,
+        limit: query.limit,
+      });
     },
 
     async createTasks(context, input) {
       contextUnused(context);
       const value = parsed(tasksCreateSchema.safeParse(input));
-      const requestHash = createHash("sha256")
-        .update(JSON.stringify({ trackId: value.trackId, tasks: value.tasks }))
-        .digest("hex");
+      const requestHash = requestHashOf({
+        trackId: value.trackId,
+        tasks: value.tasks,
+      });
       return database.transaction(async (tx) => {
         await lockScope(tx, `track:${value.trackId}`);
         const [track] = await tx
@@ -660,84 +469,58 @@ export function createPlanningService(database: Database): PlanningService {
             trackId: value.trackId,
           });
 
-        if (value.idempotencyKey) {
-          const inserted = await tx
-            .insert(idempotencyRecords)
-            .values({
-              operation: "tasks_create",
-              key: value.idempotencyKey,
-              requestHash,
-            })
-            .onConflictDoNothing()
-            .returning();
-          if (!inserted.length) {
-            const [record] = await tx
-              .select()
-              .from(idempotencyRecords)
-              .where(
-                and(
-                  eq(idempotencyRecords.operation, "tasks_create"),
-                  eq(idempotencyRecords.key, value.idempotencyKey),
-                ),
-              )
-              .limit(1);
-            if (!record || record.requestHash !== requestHash)
-              throw new DomainError(
-                "IDEMPOTENCY_KEY_REUSED",
-                "This idempotency key was already used with a different payload.",
-              );
+        // Claim / replay / record discipline lives in the idempotency
+        // module — the same implementation session_start uses and
+        // session_log will reuse (PRD §4.7).
+        return withIdempotency({
+          tx,
+          operation: "tasks_create",
+          key: value.idempotencyKey,
+          requestHash,
+          replay: async (recorded) => {
             const taskIds =
-              (record.result as { taskIds?: string[] } | null)?.taskIds ?? [];
-            return taskIds.length
-              ? tx
-                  .select()
-                  .from(tasks)
-                  .where(inArray(tasks.id, taskIds))
-                  .orderBy(asc(tasks.position))
-              : [];
-          }
-        }
-
-        const [last] = await tx
-          .select({ position: tasks.position })
-          .from(tasks)
-          .where(eq(tasks.trackId, value.trackId))
-          .orderBy(sql`${tasks.position} desc`)
-          .limit(1);
-        const created = await tx
-          .insert(tasks)
-          .values(
-            value.tasks.map((task, index) => ({
-              ...task,
-              description: task.description ?? null,
-              estimatedMinutes: task.estimatedMinutes ?? null,
-              resourceType: task.resourceType ?? null,
-              resourceValue: task.resourceValue ?? null,
-              note: task.note ?? null,
-              trackId: value.trackId,
-              position: (last?.position ?? 0) + index + 1,
-            })),
-          )
-          .returning();
-        if (!track.currentTaskId && created[0])
-          await tx
-            .update(tracks)
-            .set({ currentTaskId: created[0].id, updatedAt: new Date() })
-            .where(eq(tracks.id, track.id));
-        if (value.idempotencyKey)
-          await tx
-            .update(idempotencyRecords)
-            .set({
-              resultRef: created[0]?.id,
+              (recorded as { taskIds?: string[] } | null)?.taskIds ?? [];
+            if (!taskIds.length) return null;
+            return tx
+              .select()
+              .from(tasks)
+              .where(inArray(tasks.id, taskIds))
+              .orderBy(asc(tasks.position));
+          },
+          run: async () => {
+            const [last] = await tx
+              .select({ position: tasks.position })
+              .from(tasks)
+              .where(eq(tasks.trackId, value.trackId))
+              .orderBy(sql`${tasks.position} desc`)
+              .limit(1);
+            const created = await tx
+              .insert(tasks)
+              .values(
+                value.tasks.map((task, index) => ({
+                  ...task,
+                  description: task.description ?? null,
+                  estimatedMinutes: task.estimatedMinutes ?? null,
+                  resourceType: task.resourceType ?? null,
+                  resourceValue: task.resourceValue ?? null,
+                  note: task.note ?? null,
+                  trackId: value.trackId,
+                  position: (last?.position ?? 0) + index + 1,
+                })),
+              )
+              .returning();
+            if (!track.currentTaskId && created[0])
+              await tx
+                .update(tracks)
+                .set({ currentTaskId: created[0].id, updatedAt: new Date() })
+                .where(eq(tracks.id, track.id));
+            return {
+              value: created,
               result: { taskIds: created.map((task) => task.id) },
-            })
-            .where(
-              and(
-                eq(idempotencyRecords.operation, "tasks_create"),
-                eq(idempotencyRecords.key, value.idempotencyKey),
-              ),
-            );
-        return created;
+              resultRef: created[0]?.id ?? null,
+            };
+          },
+        });
       });
     },
 
@@ -761,29 +544,12 @@ export function createPlanningService(database: Database): PlanningService {
       const value = parsed(reorderSchema.safeParse({ parentId: trackId, ids }));
       return database.transaction(async (tx) => {
         await lockScope(tx, `track:${trackId}`);
-        await assertCompleteOrder(
+        await renumberPositions(
           tx,
           tasks,
           value.ids,
           eq(tasks.trackId, trackId),
         );
-        const [max] = await tx
-          .select({ value: sql<number>`coalesce(max(${tasks.position}), 0)` })
-          .from(tasks)
-          .where(eq(tasks.trackId, trackId));
-        for (const [index, id] of value.ids.entries())
-          await tx
-            .update(tasks)
-            .set({
-              position: Number(max?.value ?? 0) + index + 1,
-              updatedAt: new Date(),
-            })
-            .where(eq(tasks.id, id));
-        for (const [index, id] of value.ids.entries())
-          await tx
-            .update(tasks)
-            .set({ position: index + 1, updatedAt: new Date() })
-            .where(eq(tasks.id, id));
         return tx
           .select()
           .from(tasks)
@@ -826,43 +592,45 @@ export function createPlanningService(database: Database): PlanningService {
           .returning();
         return {
           affectedTask: affectedTask!,
-          nextTask: await currentForTrack(tx, existing.trackId),
+          nextTask: await currentNextForTrack(tx, existing.trackId),
         };
       });
     },
 
-    async getNext(context, trackId) {
+    async getNextForTrack(context, trackId) {
       contextUnused(context);
-      if (trackId) {
-        const [track] = await database
-          .select()
-          .from(tracks)
-          .where(eq(tracks.id, trackId))
-          .limit(1);
-        if (!track)
-          throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
-            trackId,
-          });
-        if (!track.currentTaskId) return null;
-        const [task] = await database
-          .select()
-          .from(tasks)
-          .where(
-            and(
-              eq(tasks.id, track.currentTaskId),
-              eq(tasks.trackId, track.id),
-              eq(tasks.status, "pending"),
-            ),
-          )
-          .limit(1);
-        if (!task)
-          throw new DomainError(
-            "INVALID_NEXT_TASK",
-            "Track points to an invalid Current Next.",
-            { trackId },
-          );
-        return task;
-      }
+      const [track] = await database
+        .select()
+        .from(tracks)
+        .where(eq(tracks.id, trackId))
+        .limit(1);
+      if (!track)
+        throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
+          trackId,
+        });
+      if (!track.currentTaskId) return null;
+      const [task] = await database
+        .select()
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.id, track.currentTaskId),
+            eq(tasks.trackId, track.id),
+            eq(tasks.status, "pending"),
+          ),
+        )
+        .limit(1);
+      if (!task)
+        throw new DomainError(
+          "INVALID_NEXT_TASK",
+          "Track points to an invalid Current Next.",
+          { trackId },
+        );
+      return task;
+    },
+
+    async getNextForAllTracks(context) {
+      contextUnused(context);
       const activeTracks = await database
         .select()
         .from(tracks)

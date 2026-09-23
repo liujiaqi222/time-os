@@ -265,3 +265,8 @@ export const loginAttempts = pgTable(
 );
 
 export type AppSettings = typeof appSettings.$inferSelect;
+export type Goal = typeof goals.$inferSelect;
+export type Track = typeof tracks.$inferSelect;
+export type Task = typeof tasks.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
+export type Distraction = typeof distractions.$inferSelect;

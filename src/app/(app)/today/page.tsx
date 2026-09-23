@@ -1,4 +1,4 @@
-import { sessionService, settingsService } from "@/services";
+import { dashboardService, settingsService } from "@/services";
 import { TodayView } from "@/components/today-view";
 
 export default async function TodayPage({
@@ -9,7 +9,7 @@ export default async function TodayPage({
   const params = await searchParams;
   const context = { actor: "web" } as const;
   const [dashboard, settings] = await Promise.all([
-    sessionService.getDashboard(context, { manualTrackId: params?.trackId }),
+    dashboardService.getDashboard(context, { manualTrackId: params?.trackId }),
     settingsService.get(context),
   ]);
 

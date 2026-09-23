@@ -20,7 +20,7 @@ import {
 } from "@/app/(app)/session-actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { DashboardData, ActiveTrackItem } from "@/services/session";
+import type { DashboardData, ActiveTrackItem } from "@/services/dashboard";
 import { formatHumanDuration } from "@/shared/session-timer";
 
 export function TodayView({
