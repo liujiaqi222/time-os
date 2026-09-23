@@ -27,7 +27,7 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "@t3-oss/env-nextjs": "^0.13.11",
     "class-variance-authority": "^0.7.1",
-    "cn": "^0.3.2",
+    "cn": "^0.4.0",
     "drizzle-orm": "^0.45.3",
     "jose": "^6.2.12",
     "lucide-react": "^1.47.0",
