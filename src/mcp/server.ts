@@ -13,6 +13,8 @@ import type { DistractionService } from "@/services/distraction";
 import type { PlanningService } from "@/services/planning";
 import type { SessionService } from "@/services/session";
 import type { SettingsService } from "@/services/settings";
+import type { HistoryService } from "@/services/history";
+import type { StatisticsService } from "@/services/statistics";
 import {
   goalCreateSchema,
   goalUpdateSchema,
@@ -27,7 +29,11 @@ import {
   distractionListSchema,
   distractionUpdateSchema,
   sessionFinishSchema,
+  sessionListSchema,
+  sessionLogSchema,
   sessionStartSchema,
+  sessionUpdateSchema,
+  statsQuerySchema,
 } from "@/shared/schemas/session";
 import { updateSettingsSchema } from "@/shared/schemas/settings";
 
@@ -47,6 +53,8 @@ export function createTimeOsMcpServer(deps: {
   sessionService: SessionService;
   distractionService: DistractionService;
   dashboardService: DashboardService;
+  historyService: HistoryService;
+  statisticsService: StatisticsService;
 }) {
   const {
     settingsService,
@@ -54,6 +62,8 @@ export function createTimeOsMcpServer(deps: {
     sessionService,
     distractionService,
     dashboardService,
+    historyService,
+    statisticsService,
   } = deps;
   const server = new McpServer({ name: "time-os", version: "0.1.0" });
 
@@ -388,6 +398,54 @@ export function createTimeOsMcpServer(deps: {
   );
 
   sessionTool(
+    "sessions_list",
+    {
+      title: "List sessions",
+      description:
+        "List Session history with half-open time boundaries and safe cursor pagination. Cancelled records are hidden unless explicitly requested.",
+      inputSchema: sessionListSchema,
+    },
+    (input: z.input<typeof sessionListSchema>) =>
+      historyService.listSessions(context, input),
+  );
+
+  sessionTool(
+    "session_log",
+    {
+      title: "Log manual session",
+      description:
+        "Log completed focus time. Overlap requires an explicit retry with allowOverlap=true; idempotencyKey makes retries safe.",
+      inputSchema: sessionLogSchema,
+    },
+    (input: z.input<typeof sessionLogSchema>) =>
+      historyService.logSession(context, input),
+  );
+
+  sessionTool(
+    "session_update",
+    {
+      title: "Correct session",
+      description:
+        "Correct a completed Session without changing entryMode or createdVia. Overlap requires allowOverlap=true.",
+      inputSchema: sessionUpdateSchema,
+    },
+    (input: z.input<typeof sessionUpdateSchema>) =>
+      historyService.updateSession(context, input),
+  );
+
+  sessionTool(
+    "stats_get",
+    {
+      title: "Get focus statistics",
+      description:
+        "Get today, week, month, or custom focus totals using the configured timezone and real instant boundaries.",
+      inputSchema: statsQuerySchema,
+    },
+    (input: z.input<typeof statsQuerySchema>) =>
+      statisticsService.getStatistics(context, input),
+  );
+
+  sessionTool(
     "session_start",
     {
       title: "Start session",
@@ -448,7 +506,7 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "Cancel session",
       description:
-        "Cancel an active or paused session. Excluded from default history and stats; releases the active session lock.",
+        "Cancel a non-cancelled Session, including an incorrect completed record. It remains in audit history but is excluded from default history and stats.",
       inputSchema: z.object({ id: z.string().uuid() }),
     },
     (input: { id: string }) => sessionService.cancelSession(context, input.id),

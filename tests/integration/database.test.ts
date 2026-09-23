@@ -15,6 +15,8 @@ import { createPlanningService } from "@/services/planning";
 import { createDistractionService } from "@/services/distraction";
 import { createDashboardService } from "@/services/dashboard";
 import { createSessionService } from "@/services/session";
+import { createHistoryService } from "@/services/history";
+import { createStatisticsService } from "@/services/statistics";
 import { planningContract } from "@/adapters/planning-contract";
 import { sessionContract } from "@/adapters/session-contract";
 import { createTimeOsMcpServer } from "@/mcp/server";
@@ -41,9 +43,14 @@ const distractionService = createDistractionService(database);
 const sessionService = createSessionService(database, {
   distractionService,
 });
+const historyService = createHistoryService(database);
+const statisticsService = createStatisticsService(database, {
+  settingsService,
+});
 const dashboardService = createDashboardService(database, {
   sessionService,
   settingsService,
+  statisticsService,
 });
 
 beforeAll(async () => {
@@ -356,7 +363,7 @@ describe("session service and focus execution loop", () => {
     await pool.query("delete from distractions");
     await pool.query("delete from sessions");
     await pool.query(
-      "delete from idempotency_records where operation = 'session_start'",
+      "delete from idempotency_records where operation in ('session_start', 'session_log')",
     );
   });
 
@@ -502,6 +509,131 @@ describe("session service and focus execution loop", () => {
     });
     expect(nextSession.status).toBe("active");
     await sessionService.cancelSession(web, nextSession.id);
+  });
+
+  it("logs and corrects manual history with idempotency, overlap confirmation, pagination, and shared stats", async () => {
+    const { track } = await createPlan("manual-history");
+    const [task] = await planningService.createTasks(web, {
+      trackId: track.id,
+      tasks: [{ title: "Historical task" }],
+    });
+    const key = `manual-${randomUUID()}`;
+    const firstInput = {
+      trackId: track.id,
+      taskId: task!.id,
+      durationSeconds: 3600,
+      endedAt: "2026-06-01T11:00:00.000Z",
+      idempotencyKey: key,
+    };
+
+    const first = await historyService.logSession(web, firstInput);
+    const replay = await historyService.logSession(mcp, firstInput);
+    expect(replay.id).toBe(first.id);
+
+    const adjacent = await historyService.logSession(web, {
+      trackId: track.id,
+      durationSeconds: 3600,
+      endedAt: "2026-06-01T12:00:00.000Z",
+    });
+    await expect(
+      historyService.logSession(web, {
+        trackId: track.id,
+        durationSeconds: 3600,
+        endedAt: "2026-06-01T11:30:00.000Z",
+      }),
+    ).rejects.toMatchObject({ code: "SESSION_TIME_OVERLAP" });
+    const overlapping = await historyService.logSession(mcp, {
+      trackId: track.id,
+      durationSeconds: 3600,
+      endedAt: "2026-06-01T11:30:00.000Z",
+      allowOverlap: true,
+    });
+
+    const firstPage = await historyService.listSessions(web, {
+      from: "2026-06-01T00:00:00.000Z",
+      to: "2026-06-02T00:00:00.000Z",
+      limit: 2,
+    });
+    const secondPage = await historyService.listSessions(web, {
+      from: "2026-06-01T00:00:00.000Z",
+      to: "2026-06-02T00:00:00.000Z",
+      cursor: firstPage.nextCursor!,
+      limit: 2,
+    });
+    expect(firstPage.items).toHaveLength(2);
+    expect(secondPage.items).toHaveLength(1);
+    expect(
+      new Set([...firstPage.items, ...secondPage.items].map(({ id }) => id))
+        .size,
+    ).toBe(3);
+
+    const { track: otherTrack } = await createPlan("manual-other-track");
+    await expect(
+      historyService.updateSession(web, {
+        id: first.id,
+        trackId: otherTrack.id,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_NOT_IN_TRACK" });
+    const corrected = await historyService.updateSession(web, {
+      id: first.id,
+      trackId: otherTrack.id,
+      taskId: null,
+      startedAt: "2026-06-01T09:00:00.000Z",
+      endedAt: "2026-06-01T10:00:00.000Z",
+      note: "Corrected",
+    });
+    expect(corrected).toMatchObject({
+      entryMode: "manual",
+      createdVia: "web",
+      durationSeconds: 3600,
+      note: "Corrected",
+    });
+
+    const stats = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-06-01T09:00:00.000Z",
+      to: "2026-06-01T12:00:00.000Z",
+      now: "2026-06-01T12:00:00.000Z",
+    });
+    expect(stats.totalFocusSeconds).toBe(10_800);
+    expect(stats.sessionCount).toBe(3);
+    expect(stats.focusDays).toBe(1);
+    expect(stats.byTrack.map(({ title }) => title)).toContain(otherTrack.title);
+
+    await sessionService.cancelSession(web, overlapping.id);
+    const defaultHistory = await historyService.listSessions(web, {
+      from: "2026-06-01T00:00:00.000Z",
+      to: "2026-06-02T00:00:00.000Z",
+    });
+    expect(defaultHistory.items.map(({ id }) => id)).not.toContain(
+      overlapping.id,
+    );
+    const auditHistory = await historyService.listSessions(web, {
+      from: "2026-06-01T00:00:00.000Z",
+      to: "2026-06-02T00:00:00.000Z",
+      includeCancelled: true,
+    });
+    expect(auditHistory.items.map(({ id }) => id)).toContain(overlapping.id);
+    expect(adjacent.status).toBe("completed");
+  });
+
+  it("serializes concurrent overlap checks so only one unconfirmed record is written", async () => {
+    const { track } = await createPlan("manual-concurrency");
+    const input = {
+      trackId: track.id,
+      durationSeconds: 1800,
+      endedAt: "2026-07-01T10:00:00.000Z",
+    };
+    const results = await Promise.allSettled([
+      historyService.logSession(web, input),
+      historyService.logSession(mcp, input),
+    ]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
+      1,
+    );
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(
+      1,
+    );
   });
 
   it("atomic finish review completes task and advances Current Next", async () => {
@@ -684,6 +816,8 @@ describe("session service and focus execution loop", () => {
       sessionService,
       distractionService,
       dashboardService,
+      historyService,
+      statisticsService,
     });
     expect(server).toBeDefined();
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
@@ -13,8 +13,7 @@ import {
 } from "@/db/schema";
 import type { SessionService, SessionWithRelations } from "@/services/session";
 import type { SettingsService } from "@/services/settings";
-import { computeFocusIntervals } from "@/shared/focus-intervals";
-import { getLocalDayRange } from "@/shared/timezone";
+import type { StatisticsService } from "@/services/statistics";
 
 export interface TodayStats {
   totalFocusSeconds: number;
@@ -54,73 +53,35 @@ export function createDashboardService(
   deps: {
     sessionService: Pick<SessionService, "getActiveSession">;
     settingsService: Pick<SettingsService, "get">;
+    statisticsService: Pick<StatisticsService, "getStatistics">;
   },
 ): DashboardService {
-  const { sessionService, settingsService } = deps;
+  const { sessionService, settingsService, statisticsService } = deps;
 
   return {
     async getDashboard(context, options) {
       // The Settings module owns appSettings — timezone and selectedTrackId
       // cross its interface, not its table.
-      const settings = await settingsService.get(context);
-      const timezone = settings.timezone;
-      const now = new Date();
-      const { start: todayStart, end: todayEnd } = getLocalDayRange(
-        now,
-        timezone,
-      );
-
-      // Independent queries — run in parallel (each await is a network round
-      // trip; only settings must come first: the others need the "today"
-      // range derived from its timezone).
-      const [
-        activeSession,
-        completedTasksToday,
-        todaySessions,
-        activeTrackRows,
-      ] = await Promise.all([
-        sessionService.getActiveSession(context),
-        database
-          .select({ count: sql<number>`count(*)` })
-          .from(tasks)
-          .where(
-            and(
-              eq(tasks.status, "completed"),
-              isNotNull(tasks.completedAt),
-              sql`${tasks.completedAt} >= ${todayStart} and ${tasks.completedAt} <= ${todayEnd}`,
-            ),
-          ),
-        // Non-cancelled sessions intersecting today
-        database
-          .select()
-          .from(sessions)
-          .where(
-            and(
-              ne(sessions.status, "cancelled"),
-              sql`${sessions.startedAt} <= ${todayEnd} and (${sessions.endedAt} is null or ${sessions.endedAt} >= ${todayStart})`,
-            ),
-          ),
-        // Active tracks under active goals
-        database
-          .select({
-            track: tracks,
-            goal: goals,
-          })
-          .from(tracks)
-          .innerJoin(goals, eq(tracks.goalId, goals.id))
-          .where(and(eq(tracks.status, "active"), eq(goals.status, "active")))
-          .orderBy(asc(goals.position), asc(tracks.position)),
-      ]);
-
-      const completedTasksCount = Number(completedTasksToday[0]?.count ?? 0);
-
-      // Focus-time math lives in the pure focus-intervals module: the same
-      // implementation T04 History/Stats will reuse, unit-testable without
-      // a database.
-      const { totalFocusSeconds, trackFocusSeconds } = computeFocusIntervals(
-        todaySessions,
-        { start: todayStart, end: todayEnd },
-        now,
+      // Today delegates all counting and interval math to StatisticsService;
+      // History, Today and stats_get therefore cannot drift into separate
+      // definitions of focus time.
+      const [settings, activeSession, todayStats, activeTrackRows] =
+        await Promise.all([
+          settingsService.get(context),
+          sessionService.getActiveSession(context),
+          statisticsService.getStatistics(context, { period: "today" }),
+          database
+            .select({
+              track: tracks,
+              goal: goals,
+            })
+            .from(tracks)
+            .innerJoin(goals, eq(tracks.goalId, goals.id))
+            .where(and(eq(tracks.status, "active"), eq(goals.status, "active")))
+            .orderBy(asc(goals.position), asc(tracks.position)),
+        ]);
+      const trackFocusSeconds = new Map(
+        todayStats.byTrack.map((track) => [track.trackId, track.focusSeconds]),
       );
 
       const activeTracks: ActiveTrackItem[] = [];
@@ -227,9 +188,9 @@ export function createDashboardService(
       return {
         activeSession,
         todayStats: {
-          totalFocusSeconds,
-          completedTasksCount,
-          sessionCount: todaySessions.length,
+          totalFocusSeconds: todayStats.totalFocusSeconds,
+          completedTasksCount: todayStats.completedTaskCount,
+          sessionCount: todayStats.sessionCount,
         },
         selectedTrack,
         activeTracks,

@@ -126,7 +126,10 @@ export function createSessionService(
           .leftJoin(tasks, eq(sessions.taskId, tasks.id))
           .where(eq(sessions.id, id))
           .limit(1),
-        distractionService.listDistractions(context, { sessionId: id }),
+        distractionService.listDistractions(context, {
+          sessionId: id,
+          includeArchived: true,
+        }),
       ]);
 
       if (!rows.length || !rows[0]) {
@@ -153,6 +156,7 @@ export function createSessionService(
 
       return database.transaction(async (tx) => {
         await lockScope(tx, "sessions:running");
+        await lockScope(tx, "sessions:timeline");
 
         // Claim / replay / record discipline lives in the idempotency
         // module — the same implementation tasks_create uses and
@@ -454,13 +458,8 @@ export function createSessionService(
           return session;
         }
 
-        if (session.status === "completed") {
-          throw new DomainError(
-            "INVALID_SESSION_STATE",
-            "A completed session cannot be cancelled.",
-          );
-        }
-
+        // Completed records may be cancelled as a reversible correction;
+        // cancelled records remain readable but can never be revived.
         const now = new Date();
         const [updated] = await tx
           .update(sessions)

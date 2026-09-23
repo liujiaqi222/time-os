@@ -7,9 +7,11 @@ import { createTimeOsMcpServer } from "@/mcp/server";
 import {
   dashboardService,
   distractionService,
+  historyService,
   planningService,
   sessionService,
   settingsService,
+  statisticsService,
 } from "@/services";
 
 export const runtime = "nodejs";
@@ -23,6 +25,8 @@ const handler = createMcpHandler(
       sessionService,
       distractionService,
       dashboardService,
+      historyService,
+      statisticsService,
     }),
   {
     onerror(error) {

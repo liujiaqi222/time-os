@@ -34,6 +34,7 @@ async function run<T>(work: () => Promise<T>): Promise<Result<T>> {
   await authorize();
   const result = await sessionContract(work);
   revalidatePath("/today");
+  revalidatePath("/history");
   revalidatePath("/goals");
   revalidatePath("/tracks/[id]", "page");
   return result;
