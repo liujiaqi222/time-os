@@ -202,6 +202,7 @@ test.describe("Focus execution loop", () => {
   test("overtime does not automatically finish the session", async ({
     page,
   }) => {
+    await page.clock.install();
     await loginAndSetup(page);
     await ensureNoActiveSession(page);
 
@@ -214,8 +215,9 @@ test.describe("Focus execution loop", () => {
     await startButton.click();
     await page.waitForURL(/\/focus\/[0-9a-f-]+/);
 
-    // Advance the clock well beyond the planned focus duration (e.g. 30 minutes)
-    await page.clock.fastForward("30:00");
+    // Advance beyond the largest allowed configured focus duration. Earlier
+    // tests intentionally change the default, so 30 minutes is not enough.
+    await page.clock.fastForward("05:00:00");
 
     // The session should still be active — verify overtime indicator is shown
     // and Pause/Finish buttons are still available (not auto-finished)

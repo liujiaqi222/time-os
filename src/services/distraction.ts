@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
@@ -101,12 +101,39 @@ export function createDistractionService(
       if (!query.includeArchived) {
         conditions.push(isNull(distractions.archivedAt));
       }
+      if (query.cursor) {
+        const [cursor] = await database
+          .select({
+            id: distractions.id,
+            sessionId: distractions.sessionId,
+            createdAt: distractions.createdAt,
+          })
+          .from(distractions)
+          .where(eq(distractions.id, query.cursor))
+          .limit(1);
+        if (!cursor || cursor.sessionId !== targetSessionId) {
+          throw new DomainError(
+            "INVALID_INPUT",
+            "Distraction cursor was not found in this Session.",
+          );
+        }
+        conditions.push(
+          or(
+            gt(distractions.createdAt, cursor.createdAt),
+            and(
+              eq(distractions.createdAt, cursor.createdAt),
+              gt(distractions.id, cursor.id),
+            ),
+          )!,
+        );
+      }
 
       return database
         .select()
         .from(distractions)
         .where(and(...conditions))
-        .orderBy(asc(distractions.createdAt));
+        .orderBy(asc(distractions.createdAt), asc(distractions.id))
+        .limit(query.limit);
     },
 
     async updateDistraction(_context, id, input) {

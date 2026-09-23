@@ -108,6 +108,24 @@ describe("computeFocusIntervals", () => {
     expect(totals.totalFocusSeconds).toBe(hours(2) - 300);
   });
 
+  it("clips a live Session to the queried interval", () => {
+    const totals = computeFocusIntervals(
+      [
+        {
+          trackId: "t1",
+          status: "active",
+          startedAt: new Date("2026-09-22T22:00:00Z"),
+          endedAt: null,
+          durationSeconds: null,
+          totalPausedSeconds: 0,
+        },
+      ],
+      range,
+      new Date("2026-09-23T02:00:00Z"),
+    );
+    expect(totals.totalFocusSeconds).toBe(hours(2));
+  });
+
   it("freezes a paused session at pausedAt, deducting prior pauses", () => {
     const totals = computeFocusIntervals(
       [
