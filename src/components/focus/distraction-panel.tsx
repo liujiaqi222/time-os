@@ -38,7 +38,7 @@ export function DistractionPanel({
       <CardContent className="space-y-4 p-5 sm:p-6">
         <div className="flex items-center justify-between">
           <span className="font-mono text-xs font-medium tracking-wider text-stone-500 uppercase">
-            Distractions (按 D 快速记录)
+            打断（按 D 快速记录）
           </span>
           <span className="font-mono text-xs text-stone-400">
             {distractions.list.length} 条打断

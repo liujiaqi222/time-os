@@ -25,6 +25,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { planningService, sessionService, settingsService } from "@/services";
+import { goalTrackStatusLabel, taskStatusLabel } from "@/shared/labels";
 
 const context = { actor: "web" } as const;
 const textareaClass =
@@ -76,13 +77,13 @@ export default async function TrackPage({
           render={<Link href="/goals" />}
         >
           <ArrowLeft />
-          返回 Goals
+          返回计划
         </Button>
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-                Track · {track.status}
+                推进线 · {goalTrackStatusLabel[track.status]}
               </p>
             </div>
             <h1 className="text-4xl font-semibold tracking-tight">
@@ -103,7 +104,7 @@ export default async function TrackPage({
               />
             }
           >
-            {showArchived ? "隐藏 Archived" : "查看 Archived"}
+            {showArchived ? "隐藏已归档" : "查看已归档"}
           </Button>
         </div>
       </header>
@@ -121,9 +122,9 @@ export default async function TrackPage({
           <p className="font-medium text-stone-800">当前为只读状态</p>
           <p className="mt-1">
             {goal.status !== "active"
-              ? `所属 Goal「${goal.title}」已${goal.status === "completed" ? "完成" : "归档"}`
-              : `这个 Track 已${track.status === "completed" ? "完成" : "归档"}`}
-            ，请先在 Goals 页面重新启用，再修改任务或开始专注。
+              ? `所属目标「${goal.title}」已${goal.status === "completed" ? "完成" : "归档"}`
+              : `这个推进线已${track.status === "completed" ? "完成" : "归档"}`}
+            ，请先在计划页面重新启用，再修改任务或开始专注。
           </p>
         </div>
       )}
@@ -131,7 +132,7 @@ export default async function TrackPage({
       {canEdit && canReorderVisible ? (
         <SortableList
           key={visibleTasks.map((task) => task.id).join(":")}
-          label="调整任务顺序（不会改变 Current Next）"
+          label="调整任务顺序（不会改变下一步）"
           items={visibleTasks.map((task) => ({
             id: task.id,
             label: task.title,
@@ -140,7 +141,7 @@ export default async function TrackPage({
         />
       ) : canEdit ? (
         <p className="text-xs text-stone-500">
-          要调整完整顺序，请先显示 Archived Task。
+          要调整完整顺序，请先显示已归档任务。
         </p>
       ) : null}
 
@@ -191,7 +192,7 @@ export default async function TrackPage({
                           </span>
                         )}
                         <span className="rounded-full bg-stone-100 px-2 py-0.5 font-mono text-[10px] text-stone-500 uppercase">
-                          {task.status}
+                          {taskStatusLabel[task.status]}
                         </span>
                       </div>
                       {task.description && (
@@ -201,7 +202,7 @@ export default async function TrackPage({
                       )}
                       <div className="flex flex-wrap gap-3 text-xs text-stone-500">
                         {task.estimatedMinutes && (
-                          <span>{task.estimatedMinutes} min</span>
+                          <span>{task.estimatedMinutes} 分钟</span>
                         )}
                         {task.note && <span>备注：{task.note}</span>}
                         {task.resourceType === "url" && task.resourceValue && (
@@ -266,7 +267,7 @@ export default async function TrackPage({
                               />
                               <ConfirmSubmit
                                 title={`跳过「${task.title}」？`}
-                                description="跳过后会保留这条任务记录；如果它是 Current Next，将自动推进到下一个待办任务。"
+                                description="跳过后会保留这条任务记录；如果它是下一步，将自动推进到下一个待办任务。"
                                 confirmLabel="确认跳过"
                               >
                                 <SkipForward />

@@ -39,7 +39,7 @@ export function PlanningStatusAction({
   >(updatePlanningStatusAction, undefined);
 
   const isComplete = status === "completed";
-  const entityLabel = entityType === "goal" ? "Goal" : "Track";
+  const entityLabel = entityType === "goal" ? "目标" : "推进线";
   const actionLabel = isComplete ? "完成" : "归档";
   const titleId = `status-dialog-${entityId}-${status}`;
 
@@ -64,7 +64,7 @@ export function PlanningStatusAction({
             titleId={titleId}
             title={
               blockingSession
-                ? `暂时无法${actionLabel} ${entityLabel}`
+                ? `暂时无法${actionLabel}${entityLabel}`
                 : `${actionLabel}「${entityTitle}」？`
             }
             description={
@@ -75,9 +75,9 @@ export function PlanningStatusAction({
                   的专注。请先完成或取消这段专注，再回来调整计划状态。
                 </>
               ) : isComplete ? (
-                `完成后，这个 ${entityLabel} 会从进行中的计划中收起；任务和历史记录都会保留，也可以之后重新启用。`
+                `完成后，这个${entityLabel}会从进行中的计划中收起；任务和历史记录都会保留，也可以之后重新启用。`
               ) : (
-                `归档后，这个 ${entityLabel} 会从进行中的计划中收起；内容不会删除，也可以之后重新启用。`
+                `归档后，这个${entityLabel}会从进行中的计划中收起；内容不会删除，也可以之后重新启用。`
               )
             }
             confirmLabel={
