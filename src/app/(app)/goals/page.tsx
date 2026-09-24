@@ -63,11 +63,13 @@ export default async function GoalsPage({
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div className="space-y-2">
           <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-            计划
+            规划路线
           </p>
-          <h1 className="text-4xl font-semibold tracking-tight">Goals</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">
+            目标与推进路线
+          </h1>
           <p className="max-w-2xl leading-7 text-stone-600">
-            把方向拆成 Track，再为每条推进线保留一个明确的 Current Next。
+            把长远方向拆解为具体的推进线，为每条推进线保留一个明确的“当前下一步”。
           </p>
         </div>
         <Button
@@ -81,7 +83,7 @@ export default async function GoalsPage({
 
       <details className="group rounded-2xl border border-stone-200 bg-white/70">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-5 font-medium text-stone-800">
-          <span>新建 Goal</span>
+          <span>新建长期目标</span>
           <span className="text-sm font-normal text-stone-500 group-open:hidden">
             添加一个长期方向
           </span>
@@ -92,11 +94,11 @@ export default async function GoalsPage({
         <div className="border-t border-stone-200 p-5">
           <form action={createGoalAction} className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="new-goal-title">Goal 名称</Label>
+              <Label htmlFor="new-goal-title">长期目标名称</Label>
               <Input
                 id="new-goal-title"
                 name="title"
-                placeholder="例如：发布 Time OS MVP"
+                placeholder="例如：发布 Time OS 个人执行系统"
                 required
                 maxLength={240}
               />
@@ -106,7 +108,7 @@ export default async function GoalsPage({
               <Input
                 id="new-goal-description"
                 name="description"
-                placeholder="可选"
+                placeholder="可选：愿景、动机或验收指标"
               />
             </div>
             <Button
@@ -114,7 +116,7 @@ export default async function GoalsPage({
               className="sm:col-span-2 sm:justify-self-start"
             >
               <Plus />
-              创建 Goal
+              创建长期目标
             </Button>
           </form>
         </div>
@@ -123,7 +125,7 @@ export default async function GoalsPage({
       {showAll || visibleGoals.length === allGoals.items.length ? (
         <SortableList
           key={goalsWithTracks.map(({ goal }) => goal.id).join(":")}
-          label="拖动调整 Goal 顺序"
+          label="拖动调整长期目标顺序"
           items={goalsWithTracks.map(({ goal }) => ({
             id: goal.id,
             label: goal.title,
@@ -132,13 +134,13 @@ export default async function GoalsPage({
         />
       ) : (
         <p className="text-xs text-stone-500">
-          要调整完整 Goal 顺序，请先显示已完成与已归档项目。
+          要调整完整目标顺序，请先显示已完成与已归档项目。
         </p>
       )}
 
       {goalsWithTracks.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-stone-300 p-10 text-center text-stone-600">
-          还没有 Goal。先建立一个值得持续推进的方向。
+          还没有长期目标。先建立一个值得持续推进的方向。
         </div>
       ) : (
         <div className="space-y-6">
@@ -215,7 +217,7 @@ export default async function GoalsPage({
                 {goal.status === "active" && (
                   <details className="mt-3 text-sm">
                     <summary className="cursor-pointer text-stone-500">
-                      编辑 Goal
+                      编辑目标
                     </summary>
                     <form
                       action={updateGoalAction}
@@ -224,7 +226,7 @@ export default async function GoalsPage({
                       <input type="hidden" name="id" value={goal.id} />
                       <div className="space-y-2">
                         <Label htmlFor={`goal-title-${goal.id}`}>
-                          Goal 名称
+                          长期目标名称
                         </Label>
                         <Input
                           id={`goal-title-${goal.id}`}
@@ -258,13 +260,13 @@ export default async function GoalsPage({
               <CardContent className="space-y-4">
                 {goal.status !== "active" ? (
                   <p className="rounded-xl bg-stone-100 px-3 py-2 text-sm text-stone-600">
-                    这个 Goal 已{goal.status === "completed" ? "完成" : "归档"}
-                    。重新启用后才能调整其中的 Track。
+                    这个目标已{goal.status === "completed" ? "完成" : "归档"}
+                    。重新启用后才能调整其中的推进线。
                   </p>
                 ) : showAll || tracks.length === allTracks.length ? (
                   <SortableList
                     key={tracks.map((track) => track.id).join(":")}
-                    label="拖动调整 Track 顺序"
+                    label="拖动调整推进线顺序"
                     items={tracks.map((track) => ({
                       id: track.id,
                       label: track.title,
@@ -273,7 +275,7 @@ export default async function GoalsPage({
                   />
                 ) : (
                   <p className="text-xs text-stone-500">
-                    要调整完整 Track 顺序，请先显示已完成与已归档项目。
+                    要调整完整推进线顺序，请先显示已完成与已归档项目。
                   </p>
                 )}
                 <div className="grid gap-3 md:grid-cols-2">
@@ -300,7 +302,7 @@ export default async function GoalsPage({
                           variant="ghost"
                           render={<Link href={`/tracks/${track.id}`} />}
                         >
-                          打开 <ArrowRight />
+                          进入推进线 <ArrowRight />
                         </Button>
                       </div>
                       {track.description && (
@@ -311,7 +313,7 @@ export default async function GoalsPage({
                       {goal.status === "active" && (
                         <details className="mt-3 text-xs text-stone-500">
                           <summary className="cursor-pointer">
-                            {track.status === "active" ? "编辑与状态" : "状态"}
+                            {track.status === "active" ? "编辑推进线" : "状态"}
                           </summary>
                           {track.status === "active" && (
                             <form
@@ -321,7 +323,7 @@ export default async function GoalsPage({
                               <input type="hidden" name="id" value={track.id} />
                               <div className="space-y-2">
                                 <Label htmlFor={`track-title-${track.id}`}>
-                                  Track 名称
+                                  推进线名称
                                 </Label>
                                 <Input
                                   id={`track-title-${track.id}`}
@@ -419,7 +421,7 @@ export default async function GoalsPage({
                 {goal.status === "active" && (
                   <details className="rounded-xl border border-dashed border-stone-300 bg-stone-50/60">
                     <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-stone-700">
-                      ＋ 添加 Track
+                      ＋ 添加推进线
                     </summary>
                     <form
                       action={createTrackAction}
@@ -428,7 +430,7 @@ export default async function GoalsPage({
                       <input type="hidden" name="goalId" value={goal.id} />
                       <div className="space-y-2">
                         <Label htmlFor={`new-track-title-${goal.id}`}>
-                          Track 名称
+                          推进线名称
                         </Label>
                         <Input
                           id={`new-track-title-${goal.id}`}
@@ -453,7 +455,7 @@ export default async function GoalsPage({
                         className="sm:col-span-2 sm:justify-self-start"
                       >
                         <Plus />
-                        创建 Track
+                        创建推进线
                       </Button>
                     </form>
                   </details>

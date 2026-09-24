@@ -40,7 +40,7 @@ export default async function SetupPage() {
       <div className="mx-auto max-w-3xl space-y-8">
         <header className="space-y-3">
           <p className="font-mono text-xs tracking-[0.2em] text-stone-500 uppercase">
-            First run
+            首次配置
           </p>
           <h1 className="text-4xl font-semibold tracking-tight">
             设置你的执行环境
@@ -51,7 +51,7 @@ export default async function SetupPage() {
         </header>
         <Alert>
           <CheckCircle2 aria-hidden="true" />
-          <AlertTitle>Database ready</AlertTitle>
+          <AlertTitle>数据库连接就绪</AlertTitle>
           <AlertDescription>
             连接与 committed migration 检查通过。
           </AlertDescription>
@@ -59,7 +59,7 @@ export default async function SetupPage() {
         <div className="grid gap-6 md:grid-cols-[1fr_0.9fr]">
           <Card>
             <CardHeader>
-              <CardTitle>Time settings</CardTitle>
+              <CardTitle>时间偏好</CardTitle>
             </CardHeader>
             <CardContent>
               <SettingsForm
@@ -75,7 +75,7 @@ export default async function SetupPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <PlugZap className="size-5" />
-                MCP connection
+                AI 智能体连接 (MCP)
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">

@@ -39,7 +39,7 @@ export function PlanningStatusAction({
   >(updatePlanningStatusAction, undefined);
 
   const isComplete = status === "completed";
-  const entityLabel = entityType === "goal" ? "Goal" : "Track";
+  const entityLabel = entityType === "goal" ? "长期目标" : "推进线";
   const actionLabel = isComplete ? "完成" : "归档";
   const titleId = `status-dialog-${entityId}-${status}`;
 

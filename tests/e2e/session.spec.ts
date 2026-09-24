@@ -40,20 +40,18 @@ test.describe("Focus execution loop", () => {
 
     // 1. Create a Goal and Track with two tasks
     await page.goto("/goals");
-    await page.getByText("新建 Goal", { exact: true }).click();
-    await page
-      .getByPlaceholder("例如：发布 Time OS MVP")
-      .fill("Ship Focus Loop");
-    await page.getByRole("button", { name: "创建 Goal" }).click();
+    await page.getByText(/新建 (Goal|长期目标)/).click();
+    await page.getByPlaceholder(/例如：发布 Time OS/).fill("Ship Focus Loop");
+    await page.getByRole("button", { name: /创建 (Goal|长期目标)/ }).click();
     await expect(page.getByText("Ship Focus Loop").first()).toBeVisible();
 
     const goalCard = page
       .locator('[data-slot="card"]')
       .filter({ hasText: "Ship Focus Loop" })
       .first();
-    await goalCard.getByText("＋ 添加 Track", { exact: true }).click();
-    await goalCard.getByLabel("Track 名称").fill("Track Execution");
-    await goalCard.getByRole("button", { name: "创建 Track" }).click();
+    await goalCard.getByText(/＋ 添加 (Track|推进线)/).click();
+    await goalCard.getByLabel(/(Track|推进线) 名称/).fill("Track Execution");
+    await goalCard.getByRole("button", { name: /创建 (Track|推进线)/ }).click();
     await page.getByRole("link", { name: "Track Execution" }).first().click();
     await page.waitForURL(/\/tracks\/.+/);
     const trackId = page.url().split("/").pop()!;
@@ -93,29 +91,36 @@ test.describe("Focus execution loop", () => {
     await expect(page.getByRole("button", { name: /暂停/ })).toBeVisible();
 
     // 4. Quick Note autosave & reload recovery
-    const noteArea = page.getByPlaceholder(/记录灵感/);
+    const noteArea = page.getByPlaceholder(/记录(灵感|推进进展)/);
     await noteArea.fill("Important thoughts during focus");
-    await expect(page.getByText("Saved")).toBeVisible();
+    await expect(page.getByText(/Saved|已自动保存/)).toBeVisible();
 
     await page.reload();
     await expect(noteArea).toHaveValue("Important thoughts during focus");
 
     // 5. Distractions
-    const distractionInput = page.getByPlaceholder(/记录打断/);
+    const distractionInput =
+      page.getByPlaceholder(/记录打断|随手记下一闪而过的杂念/);
     await distractionInput.fill("Urgent phone call");
-    await page.getByRole("button", { name: "记录" }).click();
+    await page.getByRole("button", { name: /记录|暂存/ }).click();
     await expect(page.getByText("Urgent phone call")).toBeVisible();
 
     // 6. Finish Review Modal
-    await page.getByRole("button", { name: /完成/ }).click();
-    await expect(page.getByRole("heading", { name: /专注回顾/ })).toBeVisible();
+    await page.getByRole("button", { name: /(完成|结束交接)/ }).click();
+    await expect(
+      page.getByRole("heading", { name: /(专注回顾|专注收尾与推进交接)/ }),
+    ).toBeVisible();
 
     // Radio for Completed
-    const completedRadio = page.getByRole("radio", { name: /标记已完成/ });
+    const completedRadio = page.getByRole("radio", {
+      name: /标记已完成|已搞定/,
+    });
     await expect(completedRadio).toBeChecked();
 
     // Submit review
-    await page.getByRole("button", { name: "确认完成" }).click();
+    await page
+      .getByRole("button", { name: /(确认完成|完成并保存交接)/ })
+      .click();
 
     // 7. Verify redirection and advancement
     await page.waitForURL(/\/today$/);
@@ -144,12 +149,12 @@ test.describe("Focus execution loop", () => {
     await page.waitForURL(/\/focus\/[0-9a-f-]+/);
 
     // Click Cancel
-    await page.getByRole("button", { name: "取消" }).click();
+    await page.getByRole("button", { name: /(取消|放弃专注)/ }).click();
     await expect(
       page.getByRole("heading", { name: "确定取消本次专注吗？" }),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "确定取消" }).click();
+    await page.getByRole("button", { name: /(确定取消|放弃专注)/ }).click();
     await page.waitForURL(/\/today$/);
 
     // Verify we can start again without ACTIVE_SESSION_EXISTS
@@ -163,8 +168,8 @@ test.describe("Focus execution loop", () => {
     await page.waitForURL(/\/focus\/[0-9a-f-]+/);
 
     // Clean up
-    await page.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "确定取消" }).click();
+    await page.getByRole("button", { name: /(取消|放弃专注)/ }).click();
+    await page.getByRole("button", { name: /(确定取消|放弃专注)/ }).click();
     await page.waitForURL(/\/today$/);
   });
 
@@ -187,18 +192,18 @@ test.describe("Focus execution loop", () => {
 
     // Global active banner should be visible
     const banner = page.getByRole("region", {
-      name: "Active focus session banner",
+      name: /(Active focus session banner|进行中的专注提示)/,
     });
     await expect(banner).toBeVisible();
-    await expect(banner.getByText("Return to focus")).toBeVisible();
+    await expect(banner.getByText(/(Return to focus|返回专注)/)).toBeVisible();
 
     // Click Return to focus
-    await banner.getByText("Return to focus").click();
+    await banner.getByText(/(Return to focus|返回专注)/).click();
     await page.waitForURL(/\/focus\/[0-9a-f-]+/);
 
     // Clean up
-    await page.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "确定取消" }).click();
+    await page.getByRole("button", { name: /(取消|放弃专注)/ }).click();
+    await page.getByRole("button", { name: /(确定取消|放弃专注)/ }).click();
     await page.waitForURL(/\/today$/);
   });
 
@@ -226,11 +231,13 @@ test.describe("Focus execution loop", () => {
     // and Pause/Finish buttons are still available (not auto-finished)
     await expect(page.getByText(/超时|Overtime/i)).toBeVisible();
     await expect(page.getByRole("button", { name: /暂停|继续/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /完成/ })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /(完成|结束交接)/ }),
+    ).toBeVisible();
 
     // Clean up
-    await page.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "确定取消" }).click();
+    await page.getByRole("button", { name: /(取消|放弃专注)/ }).click();
+    await page.getByRole("button", { name: /(确定取消|放弃专注)/ }).click();
     await page.waitForURL(/\/today$/);
   });
 });

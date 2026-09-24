@@ -194,7 +194,7 @@ export function FocusView({
             className="flex items-center gap-2 text-sm text-stone-600 transition hover:text-stone-900"
           >
             <ArrowLeft className="size-4" aria-hidden="true" />
-            <span>返回 Today</span>
+            <span>返回今日聚焦</span>
           </Link>
 
           <span
@@ -237,10 +237,10 @@ export function FocusView({
           {/* Target Track & Task Info */}
           <div className="space-y-2 text-center">
             <p className="font-mono text-xs tracking-wider text-stone-500 uppercase">
-              {session.track.title}
+              推进线 · {session.track.title}
             </p>
             <h1 className="text-2xl font-semibold tracking-tight text-stone-900 sm:text-3xl">
-              {session.task?.title ?? "无结构专注 (Unstructured Focus)"}
+              {session.task?.title ?? "自由专注"}
             </h1>
             {session.task?.description && (
               <p className="mx-auto max-w-lg text-sm text-stone-600">
@@ -270,8 +270,7 @@ export function FocusView({
             <p className="mt-3 font-mono text-xs text-stone-500">
               {isOvertime ? (
                 <span className="font-medium text-amber-700">
-                  已超时 (Overtime) · 累计已专注{" "}
-                  {formatHumanDuration(elapsedSeconds)}
+                  已超时 · 累计已专注 {formatHumanDuration(elapsedSeconds)}
                 </span>
               ) : plannedSeconds ? (
                 <span>剩余时间 (计划 {session.plannedMinutes} 分钟)</span>
@@ -293,12 +292,12 @@ export function FocusView({
               {isPaused ? (
                 <>
                   <Play className="size-4 fill-current" aria-hidden="true" />
-                  继续 (Space)
+                  继续 (空格)
                 </>
               ) : (
                 <>
                   <Pause className="size-4" aria-hidden="true" />
-                  暂停 (Space)
+                  暂停 (空格)
                 </>
               )}
             </Button>
@@ -310,7 +309,7 @@ export function FocusView({
               className="h-12 min-w-32 gap-2 bg-stone-900 text-base text-stone-50 shadow-xs hover:bg-stone-800"
             >
               <CheckCircle2 className="size-4" aria-hidden="true" />
-              完成 (F)
+              结束交接 (F)
             </Button>
 
             <Button
@@ -320,7 +319,7 @@ export function FocusView({
               onClick={() => setIsCancelOpen(true)}
               className="h-12 text-sm text-stone-500 hover:text-red-700"
             >
-              取消
+              放弃专注
             </Button>
           </div>
 
@@ -332,12 +331,12 @@ export function FocusView({
                   htmlFor="focus-note"
                   className="font-mono text-xs font-medium tracking-wider text-stone-500 uppercase"
                 >
-                  Quick Note
+                  本次交接笔记
                 </label>
                 <span className="font-mono text-xs text-stone-400">
-                  {noteStatus === "saving" && "Saving..."}
-                  {noteStatus === "saved" && "Saved"}
-                  {noteStatus === "error" && "Error saving"}
+                  {noteStatus === "saving" && "正在保存…"}
+                  {noteStatus === "saved" && "已自动保存"}
+                  {noteStatus === "error" && "保存失败"}
                 </span>
               </div>
               <textarea
@@ -345,7 +344,7 @@ export function FocusView({
                 rows={3}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="记录灵感、进展或下一步想法 (自动保存)..."
+                placeholder="记录推进进展、代码断点或下一次继续时的起点...（自动保存）"
                 className="w-full resize-none rounded-lg border border-stone-200 bg-transparent p-3 text-sm placeholder:text-stone-400 focus:border-stone-900 focus:outline-hidden"
               />
             </CardContent>

@@ -64,57 +64,66 @@ test("manual history requires overlap confirmation and keeps cancelled records i
   await loginAndSetup(page);
 
   await page.goto("/goals");
-  await page.getByText("新建 Goal", { exact: true }).click();
-  await page
-    .getByPlaceholder("例如：发布 Time OS MVP")
-    .fill("History E2E Goal");
-  await page.getByRole("button", { name: "创建 Goal" }).click();
+  await page.getByText(/新建 (Goal|长期目标)/).click();
+  await page.getByPlaceholder(/例如：发布 Time OS/).fill("History E2E Goal");
+  await page.getByRole("button", { name: /创建 (Goal|长期目标)/ }).click();
   const goal = page
     .locator('[data-slot="card"]')
     .filter({ hasText: "History E2E Goal" })
     .first();
-  await goal.getByText("＋ 添加 Track", { exact: true }).click();
-  await goal.getByLabel("Track 名称").fill("History E2E Track");
-  await goal.getByRole("button", { name: "创建 Track" }).click();
+  await goal.getByText(/＋ 添加 (Track|推进线)/).click();
+  await goal.getByLabel(/(Track|推进线) 名称/).fill("History E2E Track");
+  await goal.getByRole("button", { name: /创建 (Track|推进线)/ }).click();
   await expect(
     page.getByRole("link", { name: "History E2E Track" }),
   ).toBeVisible();
 
   await page.goto("/history");
-  const addSession = page
-    .locator("section")
-    .filter({ has: page.getByRole("heading", { name: "Add Session" }) });
+  const addSession = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /Add Session|补录专注/ }),
+  });
   await addSession
-    .getByLabel("Track")
-    .selectOption({ label: "History E2E Track (active)" });
-  await addSession.getByLabel("Duration (minutes)").fill("30");
-  await addSession.getByLabel("Ended at").fill("2020-01-02T10:00");
-  await addSession.getByLabel("Note").fill("First historical record");
-  await addSession.getByRole("button", { name: "Add Session" }).click();
+    .getByLabel(/Track|推进线/)
+    .selectOption({ label: "History E2E Track (进行中)" });
+  await addSession.getByLabel(/Duration \(minutes\)|时长（分钟）/).fill("30");
+  await addSession.getByLabel(/Ended at|结束时间/).fill("2020-01-02T10:00");
+  await addSession.getByLabel(/Note|交接笔记/).fill("First historical record");
+  await addSession
+    .getByRole("button", { name: /Add Session|补录专注/ })
+    .click();
 
   const rows = page
     .locator("li.rounded-xl")
     .filter({ hasText: "History E2E Track" });
   await expect(rows).toHaveCount(1);
 
-  await addSession.getByLabel("Note").fill("Overlapping historical record");
-  await addSession.getByRole("button", { name: "Add Session" }).click();
+  await addSession
+    .getByLabel(/Note|交接笔记/)
+    .fill("Overlapping historical record");
+  await addSession
+    .getByRole("button", { name: /Add Session|补录专注/ })
+    .click();
   await expect(
-    page.getByText(/The Session overlaps an existing record/i),
+    page.getByText(
+      /The Session overlaps an existing record|与已有的专注记录时间重叠/i,
+    ),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Save anyway" }).click();
+  await page.getByRole("button", { name: /Save anyway|仍然保存/ }).click();
   await expect(rows).toHaveCount(2);
 
   await rows.first().getByRole("button").first().click();
   await expect(
-    page.getByRole("heading", { name: "Edit record" }),
+    page.getByRole("heading", { name: /Edit record|编辑专注记录/ }),
   ).toBeVisible();
-  await rows.first().getByRole("button", { name: "Cancel Session" }).click();
+  await rows
+    .first()
+    .getByRole("button", { name: /Cancel Session|放弃专注/ })
+    .click();
   await page.getByRole("button", { name: "确认取消" }).click();
   await expect(rows).toHaveCount(1);
 
-  await page.getByLabel("Audit cancelled").check();
-  await page.getByRole("button", { name: "Apply" }).click();
+  await page.getByLabel(/Audit cancelled|包含已放弃/).check();
+  await page.getByRole("button", { name: /Apply|筛选/ }).click();
   await expect(rows).toHaveCount(2);
   await expect(page.getByText("cancelled").first()).toBeVisible();
 });

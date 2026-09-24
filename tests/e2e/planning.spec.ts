@@ -55,19 +55,17 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
 }) => {
   await loginAndSetup(page);
   await page.goto("/goals");
-  await page.getByText("新建 Goal", { exact: true }).click();
-  await page
-    .getByPlaceholder("例如：发布 Time OS MVP")
-    .fill("Ship planning flow");
-  await page.getByRole("button", { name: "创建 Goal" }).click();
+  await page.getByText(/新建 (Goal|长期目标)/).click();
+  await page.getByPlaceholder(/例如：发布 Time OS/).fill("Ship planning flow");
+  await page.getByRole("button", { name: /创建 (Goal|长期目标)/ }).click();
 
   const goalCard = page
     .locator('[data-slot="card"]')
     .filter({ hasText: "Ship planning flow" })
     .first();
-  await goalCard.getByText("＋ 添加 Track", { exact: true }).click();
-  await goalCard.getByLabel("Track 名称").fill("Core workflow");
-  await goalCard.getByRole("button", { name: "创建 Track" }).click();
+  await goalCard.getByText(/＋ 添加 (Track|推进线)/).click();
+  await goalCard.getByLabel(/(Track|推进线) 名称/).fill("Core workflow");
+  await goalCard.getByRole("button", { name: /创建 (Track|推进线)/ }).click();
   await page.getByRole("link", { name: "Core workflow" }).click();
 
   await page.getByText("批量粘贴", { exact: true }).click();
@@ -77,11 +75,11 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
   await page.getByRole("button", { name: "按行创建" }).click();
   await expect(page.getByText("First task").first()).toBeVisible();
   await expect(
-    page.getByText("这是这条推进线现在唯一需要关注的下一步。"),
+    page.getByText(/这是这条推进线现在唯一需要关注的(下一步|即刻行动)/),
   ).toBeVisible();
 
   const reorder = page.getByRole("region", {
-    name: "调整任务顺序（不会改变 Current Next）",
+    name: /调整(任务|行动项)顺序/,
   });
   await reorder
     .getByRole("button", { name: "Third task", exact: true })
@@ -171,7 +169,7 @@ test("completing a Goal with an active Session stays in an actionable dialog", a
   await goalCard.getByRole("button", { name: "完成" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "暂时无法完成 Goal" }),
+    page.getByRole("heading", { name: /暂时无法完成 (Goal|长期目标)/ }),
   ).toBeVisible();
   await expect(page.getByText(/还有一段进行中的专注/)).toBeVisible();
   await expect(
