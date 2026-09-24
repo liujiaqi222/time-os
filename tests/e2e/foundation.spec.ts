@@ -39,7 +39,7 @@ test("login, setup, cookie persistence, and logout", async ({ page }) => {
   await page.reload();
   await expect(page).toHaveURL(/\/today$/);
 
-  await page.getByRole("button", { name: "Logout" }).click();
+  await page.getByRole("button", { name: "退出" }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/settings");
   await expect(page).toHaveURL(/\/login\?next=/);

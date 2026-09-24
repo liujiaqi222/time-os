@@ -40,23 +40,26 @@ test.describe("Focus execution loop", () => {
 
     // 1. Create a Goal and Track with two tasks
     await page.goto("/goals");
+    await page.getByText("新建 Goal", { exact: true }).click();
     await page
       .getByPlaceholder("例如：发布 Time OS MVP")
       .fill("Ship Focus Loop");
-    await page.getByRole("button", { name: "创建", exact: true }).click();
+    await page.getByRole("button", { name: "创建 Goal" }).click();
     await expect(page.getByText("Ship Focus Loop").first()).toBeVisible();
 
     const goalCard = page
       .locator('[data-slot="card"]')
       .filter({ hasText: "Ship Focus Loop" })
       .first();
-    await goalCard.getByPlaceholder("新 Track").fill("Track Execution");
-    await goalCard.getByRole("button", { name: "添加 Track" }).click();
+    await goalCard.getByText("＋ 添加 Track", { exact: true }).click();
+    await goalCard.getByLabel("Track 名称").fill("Track Execution");
+    await goalCard.getByRole("button", { name: "创建 Track" }).click();
     await page.getByRole("link", { name: "Track Execution" }).first().click();
     await page.waitForURL(/\/tracks\/.+/);
     const trackId = page.url().split("/").pop()!;
 
-    await page.getByPlaceholder(/每行一个 Task/).fill("Task Alpha\nTask Beta");
+    await page.getByText("批量粘贴", { exact: true }).click();
+    await page.getByPlaceholder(/每行一个任务/).fill("Task Alpha\nTask Beta");
     await page.getByRole("button", { name: "按行创建" }).click();
     await expect(page.getByText("Task Alpha").first()).toBeVisible();
 

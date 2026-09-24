@@ -265,6 +265,75 @@ describe("planning service", () => {
     ).toHaveLength(3);
   });
 
+  it("requires reactivation before editing completed planning entities", async () => {
+    const { goal, track } = await createPlan("read-only-lifecycle");
+    const [completedTask, pendingTask] = await planningService.createTasks(
+      web,
+      {
+        trackId: track.id,
+        tasks: [{ title: "Completed" }, { title: "Still pending" }],
+      },
+    );
+
+    await planningService.completeTask(web, completedTask!.id);
+    await expect(
+      planningService.updateTask(web, {
+        id: completedTask!.id,
+        title: "Edited while completed",
+      }),
+    ).rejects.toMatchObject({ code: "TASK_NOT_PENDING" });
+
+    await planningService.updateGoal(web, {
+      id: goal.id,
+      status: "completed",
+    });
+    await expect(
+      planningService.updateGoal(web, {
+        id: goal.id,
+        title: "Edited while completed",
+      }),
+    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
+    await expect(
+      planningService.updateTrack(web, {
+        id: track.id,
+        title: "Edited under completed Goal",
+      }),
+    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
+    await expect(
+      planningService.createTrack(web, {
+        goalId: goal.id,
+        title: "Added under completed Goal",
+      }),
+    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
+
+    await planningService.updateGoal(web, { id: goal.id, status: "active" });
+    await planningService.updateTrack(web, {
+      id: track.id,
+      status: "completed",
+    });
+    await expect(
+      planningService.updateTrack(web, {
+        id: track.id,
+        title: "Edited while completed",
+      }),
+    ).rejects.toMatchObject({ code: "TRACK_NOT_ACTIVE" });
+    await expect(
+      planningService.updateTask(web, {
+        id: pendingTask!.id,
+        title: "Edited under completed Track",
+      }),
+    ).rejects.toMatchObject({ code: "TRACK_NOT_ACTIVE" });
+
+    await planningService.updateTrack(web, { id: track.id, status: "active" });
+    await planningService.reopenTask(web, completedTask!.id);
+    await expect(
+      planningService.updateTask(web, {
+        id: completedTask!.id,
+        title: "Editable again",
+      }),
+    ).resolves.toMatchObject({ title: "Editable again" });
+  });
+
   it("rejects incomplete orders and keeps Current Next valid during concurrent mutations", async () => {
     const { track } = await createPlan("concurrency");
     const [first, second, third] = await planningService.createTasks(web, {

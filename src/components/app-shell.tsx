@@ -1,17 +1,10 @@
 import Link from "next/link";
-import { History, ListTodo, Settings, SunMedium } from "lucide-react";
 
 import { logoutAction } from "@/app/actions";
-import { Button } from "@/components/ui/button";
 import { ActiveSessionBanner } from "@/components/active-session-banner";
+import { PrimaryNav } from "@/components/primary-nav";
+import { Button } from "@/components/ui/button";
 import type { SessionWithRelations } from "@/services/session";
-
-const links = [
-  { href: "/today", label: "Today", icon: SunMedium },
-  { href: "/goals", label: "Goals", icon: ListTodo },
-  { href: "/history", label: "History", icon: History },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
 
 export function AppShell({
   children,
@@ -28,31 +21,18 @@ export function AppShell({
           <Link href="/today" className="font-semibold tracking-tight">
             Time OS
           </Link>
-          <nav
-            aria-label="Primary"
-            className="no-scrollbar -my-1 flex items-center gap-1 overflow-x-auto overflow-y-hidden py-1 sm:my-0 sm:overflow-visible sm:py-0"
-          >
-            {links.map(({ href, label, icon: Icon }) => (
-              <Button
-                key={href}
-                variant="ghost"
-                size="sm"
-                nativeButton={false}
-                render={<Link href={href} />}
-              >
-                <Icon aria-hidden="true" />
-                {label}
-              </Button>
-            ))}
-          </nav>
+          <PrimaryNav variant="desktop" />
           <form action={logoutAction}>
             <Button type="submit" variant="outline" size="sm">
-              Logout
+              退出
             </Button>
           </form>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-6xl px-5 py-10">{children}</main>
+      <PrimaryNav variant="mobile" />
+      <main className="mx-auto w-full max-w-6xl px-5 pt-8 pb-28 sm:py-10">
+        {children}
+      </main>
     </div>
   );
 }

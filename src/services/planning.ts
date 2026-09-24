@@ -65,6 +65,7 @@ export interface PlanningService {
     context: AuthenticatedContext,
     input?: ListInput,
   ): Promise<Page<Goal>>;
+  getGoal(context: AuthenticatedContext, id: string): Promise<Goal>;
   createGoal(
     context: AuthenticatedContext,
     input: GoalCreateInput,
@@ -177,6 +178,35 @@ async function ensureNoRunningSession(
     );
 }
 
+async function requireActiveTrack(
+  tx: Transaction,
+  trackId: string,
+): Promise<Track> {
+  const [row] = await tx
+    .select({ track: tracks, goalStatus: goals.status })
+    .from(tracks)
+    .innerJoin(goals, eq(tracks.goalId, goals.id))
+    .where(eq(tracks.id, trackId))
+    .limit(1);
+  if (!row)
+    throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
+      trackId,
+    });
+  if (row.goalStatus !== "active")
+    throw new DomainError(
+      "GOAL_NOT_ACTIVE",
+      "Reactivate the Goal before changing its Tracks or Tasks.",
+      { goalId: row.track.goalId },
+    );
+  if (row.track.status !== "active")
+    throw new DomainError(
+      "TRACK_NOT_ACTIVE",
+      "Reactivate the Track before changing its Tasks.",
+      { trackId },
+    );
+  return row.track;
+}
+
 export function createPlanningService(database: Database): PlanningService {
   const contextUnused = (_context: AuthenticatedContext) => void _context;
 
@@ -188,7 +218,19 @@ export function createPlanningService(database: Database): PlanningService {
     status: "completed" | "skipped" | "archived",
   ): Promise<TaskTransitionResult> {
     parsed(taskTransitionSchema.safeParse({ id }));
-    return database.transaction((tx) => transitionTask(tx, id, status));
+    return database.transaction(async (tx) => {
+      const [task] = await tx
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, id))
+        .limit(1);
+      if (!task)
+        throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
+          taskId: id,
+        });
+      await requireActiveTrack(tx, task.trackId);
+      return transitionTask(tx, id, status);
+    });
   }
 
   return {
@@ -209,6 +251,20 @@ export function createPlanningService(database: Database): PlanningService {
         cursor: query.cursor,
         limit: query.limit,
       });
+    },
+
+    async getGoal(context, id) {
+      contextUnused(context);
+      const [goal] = await database
+        .select()
+        .from(goals)
+        .where(eq(goals.id, id))
+        .limit(1);
+      if (!goal)
+        throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", {
+          goalId: id,
+        });
+      return goal;
     },
 
     async createGoal(context, input) {
@@ -247,6 +303,15 @@ export function createPlanningService(database: Database): PlanningService {
           throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", {
             goalId: value.id,
           });
+        if (
+          existing.status !== "active" &&
+          (value.title !== undefined || value.description !== undefined)
+        )
+          throw new DomainError(
+            "GOAL_NOT_ACTIVE",
+            "Reactivate the Goal before editing it.",
+            { goalId: value.id },
+          );
         if (
           value.status &&
           value.status !== "active" &&
@@ -364,6 +429,12 @@ export function createPlanningService(database: Database): PlanningService {
           throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", {
             goalId: value.goalId,
           });
+        if (goal.status !== "active")
+          throw new DomainError(
+            "GOAL_NOT_ACTIVE",
+            "Reactivate the Goal before adding a Track.",
+            { goalId: goal.id },
+          );
         const [last] = await tx
           .select({ position: tracks.position })
           .from(tracks)
@@ -387,15 +458,32 @@ export function createPlanningService(database: Database): PlanningService {
       const value = parsed(trackUpdateSchema.safeParse(input));
       return database.transaction(async (tx) => {
         await lockScope(tx, `track:${value.id}`);
-        const [existing] = await tx
-          .select()
+        const [row] = await tx
+          .select({ track: tracks, goalStatus: goals.status })
           .from(tracks)
+          .innerJoin(goals, eq(tracks.goalId, goals.id))
           .where(eq(tracks.id, value.id))
           .limit(1);
-        if (!existing)
+        if (!row)
           throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
             trackId: value.id,
           });
+        const existing = row.track;
+        if (row.goalStatus !== "active")
+          throw new DomainError(
+            "GOAL_NOT_ACTIVE",
+            "Reactivate the Goal before changing its Tracks.",
+            { goalId: existing.goalId },
+          );
+        if (
+          existing.status !== "active" &&
+          (value.title !== undefined || value.description !== undefined)
+        )
+          throw new DomainError(
+            "TRACK_NOT_ACTIVE",
+            "Reactivate the Track before editing it.",
+            { trackId: value.id },
+          );
         if (
           value.status &&
           value.status !== "active" &&
@@ -416,6 +504,21 @@ export function createPlanningService(database: Database): PlanningService {
       const value = parsed(reorderSchema.safeParse({ parentId: goalId, ids }));
       return database.transaction(async (tx) => {
         await lockScope(tx, `tracks:${goalId}`);
+        const [goal] = await tx
+          .select()
+          .from(goals)
+          .where(eq(goals.id, goalId))
+          .limit(1);
+        if (!goal)
+          throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", {
+            goalId,
+          });
+        if (goal.status !== "active")
+          throw new DomainError(
+            "GOAL_NOT_ACTIVE",
+            "Reactivate the Goal before reordering its Tracks.",
+            { goalId },
+          );
         await renumberPositions(
           tx,
           tracks,
@@ -459,15 +562,7 @@ export function createPlanningService(database: Database): PlanningService {
       });
       return database.transaction(async (tx) => {
         await lockScope(tx, `track:${value.trackId}`);
-        const [track] = await tx
-          .select()
-          .from(tracks)
-          .where(eq(tracks.id, value.trackId))
-          .limit(1);
-        if (!track)
-          throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
-            trackId: value.trackId,
-          });
+        const track = await requireActiveTrack(tx, value.trackId);
 
         // Claim / replay / record discipline lives in the idempotency
         // module — the same implementation session_start uses and
@@ -527,16 +622,31 @@ export function createPlanningService(database: Database): PlanningService {
     async updateTask(context, input) {
       contextUnused(context);
       const value = parsed(taskUpdateSchema.safeParse(input));
-      const [task] = await database
-        .update(tasks)
-        .set({ ...value, id: undefined, updatedAt: new Date() })
-        .where(eq(tasks.id, value.id))
-        .returning();
-      if (!task)
-        throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
-          taskId: value.id,
-        });
-      return task;
+      return database.transaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(tasks)
+          .where(eq(tasks.id, value.id))
+          .limit(1);
+        if (!existing)
+          throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
+            taskId: value.id,
+          });
+        await lockScope(tx, `track:${existing.trackId}`);
+        await requireActiveTrack(tx, existing.trackId);
+        if (existing.status !== "pending")
+          throw new DomainError(
+            "TASK_NOT_PENDING",
+            "Reopen the Task before editing it.",
+            { taskId: value.id },
+          );
+        const [task] = await tx
+          .update(tasks)
+          .set({ ...value, id: undefined, updatedAt: new Date() })
+          .where(eq(tasks.id, value.id))
+          .returning();
+        return task!;
+      });
     },
 
     async reorderTasks(context, trackId, ids) {
@@ -544,6 +654,7 @@ export function createPlanningService(database: Database): PlanningService {
       const value = parsed(reorderSchema.safeParse({ parentId: trackId, ids }));
       return database.transaction(async (tx) => {
         await lockScope(tx, `track:${trackId}`);
+        await requireActiveTrack(tx, trackId);
         await renumberPositions(
           tx,
           tasks,
@@ -585,6 +696,7 @@ export function createPlanningService(database: Database): PlanningService {
             taskId: id,
           });
         await lockScope(tx, `track:${existing.trackId}`);
+        await requireActiveTrack(tx, existing.trackId);
         const [affectedTask] = await tx
           .update(tasks)
           .set({ status: "pending", completedAt: null, updatedAt: new Date() })
@@ -672,6 +784,7 @@ export function createPlanningService(database: Database): PlanningService {
           throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
             trackId: value.trackId,
           });
+        await requireActiveTrack(tx, value.trackId);
         let task: Task | null = null;
         if (value.taskId) {
           [task] = await tx

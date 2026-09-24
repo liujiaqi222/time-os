@@ -64,16 +64,18 @@ test("manual history requires overlap confirmation and keeps cancelled records i
   await loginAndSetup(page);
 
   await page.goto("/goals");
+  await page.getByText("新建 Goal", { exact: true }).click();
   await page
     .getByPlaceholder("例如：发布 Time OS MVP")
     .fill("History E2E Goal");
-  await page.getByRole("button", { name: "创建", exact: true }).click();
+  await page.getByRole("button", { name: "创建 Goal" }).click();
   const goal = page
     .locator('[data-slot="card"]')
     .filter({ hasText: "History E2E Goal" })
     .first();
-  await goal.getByPlaceholder("新 Track").fill("History E2E Track");
-  await goal.getByRole("button", { name: "添加 Track" }).click();
+  await goal.getByText("＋ 添加 Track", { exact: true }).click();
+  await goal.getByLabel("Track 名称").fill("History E2E Track");
+  await goal.getByRole("button", { name: "创建 Track" }).click();
   await expect(
     page.getByRole("link", { name: "History E2E Track" }),
   ).toBeVisible();
@@ -107,8 +109,8 @@ test("manual history requires overlap confirmation and keeps cancelled records i
   await expect(
     page.getByRole("heading", { name: "Edit record" }),
   ).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
   await rows.first().getByRole("button", { name: "Cancel Session" }).click();
+  await page.getByRole("button", { name: "确认取消" }).click();
   await expect(rows).toHaveCount(1);
 
   await page.getByLabel("Audit cancelled").check();

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { planningContract } from "@/adapters/planning-contract";
 import { readWebSession } from "@/auth/web-session";
 import { planningService } from "@/services";
+import type { SerializedDomainError } from "@/shared/domain-error";
 
 const context = { actor: "web" } as const;
 
@@ -22,6 +23,44 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
   revalidatePath("/tracks/[id]", "page");
   revalidatePath("/today");
   return result.data;
+}
+
+export type PlanningStatusState =
+  { status: "success" } | { status: "error"; message: string } | undefined;
+
+function statusErrorMessage(error: SerializedDomainError): string {
+  if (error.code === "PARENT_HAS_ACTIVE_SESSION")
+    return "这个计划中还有正在进行或已暂停的专注。请先完成或取消当前专注。";
+  if (error.code === "GOAL_NOT_FOUND" || error.code === "TRACK_NOT_FOUND")
+    return "这个计划已不存在，刷新页面后再试。";
+  if (error.code === "INVALID_INPUT") return "状态操作无效，请刷新页面后再试。";
+  return "状态暂时无法更新，请稍后再试。";
+}
+
+export async function updatePlanningStatusAction(
+  _previousState: PlanningStatusState,
+  formData: FormData,
+): Promise<PlanningStatusState> {
+  await authorize();
+  const entityType = String(formData.get("entityType"));
+  const id = String(formData.get("id"));
+  const status = String(formData.get("status")) as "completed" | "archived";
+
+  const result = await planningContract(() => {
+    if (entityType === "goal")
+      return planningService.updateGoal(context, { id, status });
+    if (entityType === "track")
+      return planningService.updateTrack(context, { id, status });
+    throw new Error("Unknown planning entity type.");
+  });
+
+  if (!result.ok)
+    return { status: "error", message: statusErrorMessage(result.error) };
+
+  revalidatePath("/goals");
+  revalidatePath("/tracks/[id]", "page");
+  revalidatePath("/today");
+  return { status: "success" };
 }
 
 const optional = (value: FormDataEntryValue | null) => {

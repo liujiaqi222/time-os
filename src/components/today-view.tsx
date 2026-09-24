@@ -136,7 +136,6 @@ export function TodayView({
 
   return (
     <div className="space-y-10">
-      {/* Header & Today Stats */}
       <header className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
         <div className="space-y-2">
           <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
@@ -145,30 +144,29 @@ export function TodayView({
           <h1 className="text-4xl font-semibold tracking-tight">专注与执行</h1>
         </div>
 
-        {/* Stats Row */}
-        <div className="flex flex-wrap gap-4 font-mono text-sm">
-          <div className="flex items-center gap-2 rounded-lg border border-stone-200/80 bg-white/80 px-3.5 py-2 shadow-xs">
+        <div className="flex flex-wrap gap-2 text-sm">
+          <div className="flex items-center gap-2 rounded-full border border-stone-200/80 bg-white/70 px-3 py-1.5">
             <Clock className="size-4 text-stone-400" aria-hidden="true" />
-            <span className="text-stone-500">今日专注:</span>
+            <span className="text-stone-500">今日专注</span>
             <span className="font-semibold text-stone-900">
               {formatHumanDuration(todayStats.totalFocusSeconds)}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 rounded-lg border border-stone-200/80 bg-white/80 px-3.5 py-2 shadow-xs">
+          <div className="flex items-center gap-2 rounded-full border border-stone-200/80 bg-white/70 px-3 py-1.5">
             <CheckCircle2
               className="size-4 text-emerald-600"
               aria-hidden="true"
             />
-            <span className="text-stone-500">已完成:</span>
+            <span className="text-stone-500">已完成</span>
             <span className="font-semibold text-stone-900">
               {todayStats.completedTasksCount}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 rounded-lg border border-stone-200/80 bg-white/80 px-3.5 py-2 shadow-xs">
+          <div className="flex items-center gap-2 rounded-full border border-stone-200/80 bg-white/70 px-3 py-1.5">
             <Flame className="size-4 text-amber-500" aria-hidden="true" />
-            <span className="text-stone-500">Session:</span>
+            <span className="text-stone-500">专注次数</span>
             <span className="font-semibold text-stone-900">
               {todayStats.sessionCount}
             </span>
@@ -176,7 +174,6 @@ export function TodayView({
         </div>
       </header>
 
-      {/* Active Session Alert when attempting to start another */}
       {activeSessionAlert && (
         <div
           role="alert"
@@ -210,7 +207,6 @@ export function TodayView({
         </div>
       )}
 
-      {/* Primary Focus Card (Current Focus) */}
       {selectedTrack && (
         <section aria-labelledby="primary-focus-title">
           <div className="mb-3 flex items-center justify-between">
@@ -218,22 +214,26 @@ export function TodayView({
               id="primary-focus-title"
               className="font-mono text-xs tracking-wider text-stone-500 uppercase"
             >
-              Current Focus
+              当前焦点
             </h2>
             <span className="text-xs text-stone-500">
               {selectedTrack.goal.title}
             </span>
           </div>
 
-          <Card className="relative overflow-hidden border-2 border-stone-900 bg-stone-900 text-stone-50 shadow-xl">
-            <CardContent className="flex flex-col justify-between gap-8 p-8 sm:p-10">
+          <Card className="relative overflow-hidden border border-stone-200/90 bg-white/85 shadow-[0_18px_55px_rgba(41,37,36,0.08)]">
+            <div
+              aria-hidden="true"
+              className="absolute inset-y-0 left-0 w-1.5 bg-amber-400"
+            />
+            <CardContent className="flex flex-col justify-between gap-8 py-3 pr-6 pl-7 sm:py-5 sm:pr-10 sm:pl-10">
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <span className="rounded-md bg-stone-800 px-2.5 py-1 font-mono text-xs text-stone-300">
+                  <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 ring-1 ring-amber-200/70">
                     {selectedTrack.track.title}
                   </span>
                   {selectedTrack.todayFocusSeconds > 0 && (
-                    <span className="text-xs text-stone-400">
+                    <span className="text-xs text-stone-500">
                       今日已投入{" "}
                       {formatHumanDuration(selectedTrack.todayFocusSeconds)}
                     </span>
@@ -246,17 +246,17 @@ export function TodayView({
                       "尚未设置 Current Next"}
                   </h3>
                   {selectedTrack.currentNextTask?.description && (
-                    <p className="line-clamp-2 max-w-2xl text-stone-400">
+                    <p className="line-clamp-2 max-w-2xl leading-6 text-stone-600">
                       {selectedTrack.currentNextTask.description}
                     </p>
                   )}
                 </div>
 
-                <div className="flex items-center gap-3 text-sm text-stone-400">
+                <div className="flex items-center gap-2 text-sm text-stone-500">
                   <Clock className="size-4" aria-hidden="true" />
                   <span>
-                    预计时长:{" "}
-                    <strong className="font-semibold text-stone-200">
+                    预计时长{" "}
+                    <strong className="font-semibold text-stone-800">
                       {selectedTrack.currentNextTask?.estimatedMinutes ??
                         defaultFocusMinutes}{" "}
                       分钟
@@ -265,13 +265,12 @@ export function TodayView({
                 </div>
               </div>
 
-              {/* Primary Action Button */}
-              <div className="flex flex-wrap items-center gap-4">
+              <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 {activeSession ? (
                   <Button
                     size="lg"
                     nativeButton={false}
-                    className="bg-white text-stone-950 hover:bg-stone-100"
+                    className="w-full bg-stone-900 text-white hover:bg-stone-700 sm:w-auto"
                     render={<Link href={`/focus/${activeSession.id}`} />}
                   >
                     返回正在进行的专注
@@ -283,15 +282,15 @@ export function TodayView({
                       size="lg"
                       disabled={isPending}
                       onClick={() => handleStartSession(selectedTrack)}
-                      className="bg-white text-stone-950 hover:bg-stone-100"
+                      className="w-full bg-stone-900 text-white hover:bg-stone-700 sm:w-auto"
                     >
                       <Play
                         className="size-4 fill-current"
                         aria-hidden="true"
                       />
                       {selectedTrack.currentNextTask
-                        ? "开始专注 (Start Focus)"
-                        : "开始无结构专注 (Start unstructured focus)"}
+                        ? "开始专注"
+                        : "开始自由专注"}
                     </Button>
 
                     {!selectedTrack.currentNextTask && (
@@ -299,13 +298,13 @@ export function TodayView({
                         size="lg"
                         variant="outline"
                         nativeButton={false}
-                        className="border-stone-700 bg-transparent text-stone-300 hover:bg-stone-800 hover:text-white"
+                        className="w-full bg-white sm:w-auto"
                         render={
                           <Link href={`/tracks/${selectedTrack.track.id}`} />
                         }
                       >
                         <Plus className="size-4" aria-hidden="true" />
-                        添加待办 (Add task)
+                        添加任务
                       </Button>
                     )}
                   </>
@@ -315,7 +314,7 @@ export function TodayView({
                   size="lg"
                   variant="ghost"
                   nativeButton={false}
-                  className="text-stone-400 hover:bg-stone-800 hover:text-stone-200"
+                  className="w-full text-stone-500 hover:bg-stone-100 hover:text-stone-900 sm:w-auto"
                   render={<Link href={`/tracks/${selectedTrack.track.id}`} />}
                 >
                   查看 Track 详情
@@ -326,7 +325,6 @@ export function TodayView({
         </section>
       )}
 
-      {/* Secondary Tracks */}
       {secondaryTracks.length > 0 && (
         <section aria-labelledby="other-tracks-title" className="space-y-4">
           <div className="flex items-center justify-between">
@@ -334,7 +332,7 @@ export function TodayView({
               id="other-tracks-title"
               className="font-mono text-xs tracking-wider text-stone-500 uppercase"
             >
-              Other Active Tracks
+              其他进行中的 Track
             </h2>
           </div>
 

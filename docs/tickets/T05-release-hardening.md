@@ -38,6 +38,55 @@ Depends on #4.
 - 375px、常见 desktop 宽度和长文本/长 URL/大量 Tasks 场景完成视觉检查。
 - 尊重 reduced motion；颜色对比、点击区域和错误关联达到基础 WCAG AA 目标。
 
+#### Confirmed Web product findings and direction
+
+本节记录 2026-09-23 对真实 Web 运行界面的审视结论。实现前先以这些产品边界为准，不把它们降级成零散的视觉 polish。
+
+**Page responsibilities**
+
+- Today 是执行首页：回答“现在做什么”，并提供全站唯一最强的 Start/Return to Focus CTA。
+- Goals / Track detail 用于组织计划，但 Track detail 也必须允许用户从 Current Next 或具体 Task 直接开始 Focus，不能强迫用户绕回 Today。
+- History 默认首先回答“我做了什么”；统计、筛选、手动补录和审计是次级能力，不应把时间线压到页面末尾。
+- Focus 保持低干扰，不引入普通全站导航；现有计时器与 Pause / Finish 主动作层级继续保留。
+
+**Today visual direction**
+
+- 移除 Current Focus 的大面积纯黑背景。它在当前暖白页面中形成突兀的“黑色块”，视觉重量明显超过内容本身。
+- Current Focus 改为浅色主卡：白色或暖灰底、清晰边框/轻阴影，可使用一条低饱和暖色或自然色 accent rail、状态圆点或小面积 tinted header 表示焦点状态。
+- 深色实心只保留给 Start Focus / Return to Focus 主按钮；层级来自排版、留白和单一 CTA，而不是整张卡片反色。
+- Goal、Track、预计时长和今日投入作为安静的辅助信息，Task title 与主 CTA 构成视觉中心。
+
+**Navigation and responsive behavior**
+
+- Desktop 导航必须显示当前位置。
+- 375px 不得依赖隐藏滚动条的横向导航；Today、Goals、History、Settings 四个入口都应无需探索即可发现。优先采用移动端底部四栏导航，顶部仅保留品牌、active Session 状态和账户动作。
+- active Session banner 在窄屏可换行，但计时、任务和 Return to Focus 不得互相挤压或遮挡。
+
+**Planning and forms**
+
+- Goals / Track detail 从“所有管理工具同时展开”改为“先看状态与任务，再按需维护”。
+- Track detail 首屏顺序应为 Current Next + Start Focus、Task list，再到新增/批量维护；不能让完整创建表单先于 Task list 占据主要空间。
+- 新建 Goal / Track / Task 使用紧凑 composer、Dialog/Sheet 或明确的展开入口；批量粘贴、编辑、排序、完成与归档保持次级。
+- Complete、Skip、Archive 依据语义与风险区分层级，不并排呈现为同等权重的常驻动作。
+- Complete 属于正向生命周期操作，不能使用破坏性红色；状态确认统一使用站内 Dialog，不调用浏览器原生 confirm。若 active/paused Session 阻止 Goal 或 Track 状态变化，Dialog 应解释原因并直接提供返回当前 Focus 的恢复路径。
+- Completed / Archived 的 Goal、Track、Task 默认只读；必须先显式重新启用或重新打开，才能继续编辑自身或其下级内容。Web 与 Service Layer 必须执行同一规则，不能只隐藏输入框。
+- 所有字段提供持久可见 label，placeholder 只用于示例，不承担字段名称。
+
+**History hierarchy**
+
+- 默认内容顺序为简洁摘要、Session 时间线；用户首先能看到最近完成的工作。
+- 页面首屏只保留 2–3 个最有用的统计，其余统计可进入 Insights 区域或次级视图。
+- Filters 默认收敛为一个明确入口；Manual Session 使用次级按钮打开 Dialog/Sheet，不常驻为大表单。
+- cancelled audit 与记录纠错保留，但作为记录详情中的维护能力，不与日常回顾争夺主层级。
+
+**Language, feedback and accessibility**
+
+- 界面以中文为主；Goal、Track、Task、Current Next、Focus、Session 等产品领域词可以保留英文，但普通动作、状态、说明和日期格式不得随意中英混排。
+- 规划表单的可预期 domain error 必须在操作附近显示，并提供可恢复路径；不得把常规校验/状态冲突升级成整页错误。
+- 排序失败必须提示并回滚或重新拉取权威顺序；切换当前 Track、自动保存 Note 等异步动作需要可感知的 pending/success/error 状态。
+- Finish Review 与 Cancel Dialog 在 375px 矮屏完整可操作：限制高度、允许内部滚动、关闭按钮有可访问名称，关闭后恢复触发点焦点。
+- 所有持续动画支持 reduced motion；长标题、长说明和长 URL 不造成横向溢出。
+
 ### Performance and operational checks
 
 - Today、Track detail、History 和 Stats 查询避免明显 N+1；为真实查询计划补必要索引。
@@ -100,6 +149,8 @@ What it does
 ### Manual/runtime evidence
 
 - Today/Focus/Track/History/Settings 的 desktop + 375px 截图或录屏；
+- Today 浅色 Current Focus、移动端完整导航、Track 直接 Start Focus、History 首屏时间线均提供视觉证据；
+- 375px 完成一次 Finish Review，证明内容、错误和操作按钮均可到达；
 - 真实 MCP client 完成核心 read/write；
 - 全新部署 URL 上完成 acceptance flow；
 - 浏览器网络/存储检查证明 Secret 未暴露且 Cookie 属性正确；
@@ -111,6 +162,14 @@ What it does
 - [ ] 所有 acceptance scenarios 在 production-like 环境通过。
 - [ ] README 部署步骤由全新实例逐步验证，而非根据记忆编写。
 - [ ] Desktop 与 375px mobile 均可完成核心闭环。
+- [ ] Today 不再使用大面积纯黑 Current Focus 卡；页面只有 Start/Return to Focus 是最强主动作。
+- [ ] 375px 下四个主导航入口无需横向探索即可发现，并且有明确当前位置。
+- [ ] Track detail 可从 Current Next 或 Task 直接开始 Focus，Task list 位于完整新增/批量表单之前。
+- [ ] History 默认优先展示 Session 时间线；筛选、手动补录和审计为次级入口。
+- [ ] Goals / Track 表单有持久 label、局部错误与恢复反馈，常规失败不进入整页错误。
+- [ ] Goal / Track 的完成与归档使用符合风险的视觉层级和站内确认 Dialog；active Session 冲突不会触发整页错误。
+- [ ] Completed / Archived 规划实体在 Web 与 Service Layer 都保持只读，重新启用后才恢复编辑能力。
+- [ ] Finish Review 在 375px 矮屏可完整操作，Dialog 焦点与 reduced-motion 验收通过。
 - [ ] Secrets、Notes 和 Authorization 不出现在不应出现的位置。
 - [ ] migration、rollback、retry 和并发失败路径有自动化证据。
 - [ ] 一个陌生开发者可以仅依赖 README 部署自己的实例。

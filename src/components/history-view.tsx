@@ -11,6 +11,7 @@ import {
   updateHistoryDistractionAction,
   updateHistorySessionAction,
 } from "@/app/(app)/history/actions";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import type {
   HistorySession,
   HistorySessionDetail,
@@ -77,6 +78,7 @@ function SessionRow({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [overlap, setOverlap] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [trackId, setTrackId] = useState(session.trackId);
   const [taskId, setTaskId] = useState(session.taskId ?? "");
@@ -127,16 +129,13 @@ function SessionRow({
   }
 
   function cancel() {
-    if (
-      !window.confirm(
-        "Cancel this Session? It remains available in audit view.",
-      )
-    )
-      return;
     startTransition(async () => {
       const result = await cancelHistorySessionAction(session.id);
       if (!result.ok) setError(result.error.message);
-      else router.refresh();
+      else {
+        setCancelDialogOpen(false);
+        router.refresh();
+      }
     });
   }
 
@@ -245,7 +244,7 @@ function SessionRow({
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={cancel}
+                  onClick={() => setCancelDialogOpen(true)}
                   className="rounded-lg px-3 py-2 text-sm text-red-700 hover:bg-red-50"
                 >
                   Cancel Session
@@ -353,7 +352,7 @@ function SessionRow({
                     <button
                       type="button"
                       disabled={pending}
-                      onClick={cancel}
+                      onClick={() => setCancelDialogOpen(true)}
                       className="rounded-lg px-3 py-2 text-sm text-red-700 hover:bg-red-50"
                     >
                       Cancel Session
@@ -387,6 +386,20 @@ function SessionRow({
             </>
           )}
         </div>
+      )}
+      {cancelDialogOpen && (
+        <ConfirmationDialog
+          titleId={`cancel-history-session-${session.id}`}
+          title="取消这段专注？"
+          description="取消后不会计入统计，但记录仍会保留在审计视图中。这个操作不能直接撤销。"
+          confirmLabel="确认取消"
+          cancelLabel="保留这段专注"
+          pending={pending}
+          error={error}
+          tone="danger"
+          onClose={() => setCancelDialogOpen(false)}
+          onConfirm={cancel}
+        />
       )}
     </li>
   );

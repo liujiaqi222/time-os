@@ -55,24 +55,33 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
 }) => {
   await loginAndSetup(page);
   await page.goto("/goals");
+  await page.getByText("新建 Goal", { exact: true }).click();
   await page
     .getByPlaceholder("例如：发布 Time OS MVP")
     .fill("Ship planning flow");
-  await page.getByRole("button", { name: "创建", exact: true }).click();
+  await page.getByRole("button", { name: "创建 Goal" }).click();
 
-  await page.getByPlaceholder("新 Track").fill("Core workflow");
-  await page.getByRole("button", { name: "添加 Track" }).click();
+  const goalCard = page
+    .locator('[data-slot="card"]')
+    .filter({ hasText: "Ship planning flow" })
+    .first();
+  await goalCard.getByText("＋ 添加 Track", { exact: true }).click();
+  await goalCard.getByLabel("Track 名称").fill("Core workflow");
+  await goalCard.getByRole("button", { name: "创建 Track" }).click();
   await page.getByRole("link", { name: "Core workflow" }).click();
 
+  await page.getByText("批量粘贴", { exact: true }).click();
   await page
-    .getByPlaceholder(/每行一个 Task/)
+    .getByPlaceholder(/每行一个任务/)
     .fill("First task\nSecond task\nThird task");
   await page.getByRole("button", { name: "按行创建" }).click();
   await expect(page.getByText("First task").first()).toBeVisible();
-  await expect(page.getByText("这是这条推进线唯一明确的下一步")).toBeVisible();
+  await expect(
+    page.getByText("这是这条推进线现在唯一需要关注的下一步。"),
+  ).toBeVisible();
 
   const reorder = page.getByRole("region", {
-    name: "拖动调整 Task 顺序（Current Next 不会变化）",
+    name: "调整任务顺序（不会改变 Current Next）",
   });
   await reorder
     .getByRole("button", { name: "Third task", exact: true })
@@ -83,11 +92,13 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
     .locator('[data-slot="card"]')
     .filter({ hasText: "First task" })
     .last();
-  await firstCard.getByRole("button", { name: "Complete" }).click();
+  await firstCard.getByRole("button", { name: "完成" }).click();
   await expect(
     page.getByRole("heading", { name: "Second task" }),
   ).toBeVisible();
-  await firstCard.getByRole("button", { name: "Reopen" }).click();
+  await expect(firstCard.getByText("编辑任务", { exact: true })).toHaveCount(0);
+  await firstCard.getByRole("button", { name: "重新打开" }).click();
+  await expect(firstCard.getByText("编辑任务", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Second task" }),
   ).toBeVisible();
@@ -97,7 +108,7 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
     page.getByRole("heading", { name: "Core workflow" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Set as Next" }).first(),
+    page.getByRole("button", { name: "设为下一步" }).first(),
   ).toBeVisible();
 });
 
@@ -126,4 +137,47 @@ test("MCP creates a complete plan that appears in Web immediately", async ({
   await expect(
     page.getByRole("heading", { name: "MCP planned task" }),
   ).toBeVisible();
+});
+
+test("completing a Goal with an active Session stays in an actionable dialog", async ({
+  page,
+  request,
+}) => {
+  const goal = await mcpCall(request, 30, "goal_create", {
+    title: "Protected active Goal",
+  });
+  const track = await mcpCall(request, 31, "track_create", {
+    goalId: goal.data.id,
+    title: "Running Track",
+  });
+  const tasks = await mcpCall(request, 32, "tasks_create", {
+    trackId: track.data.id,
+    tasks: [{ title: "Running Task" }],
+    idempotencyKey: "planning-active-session-tasks",
+  });
+  const session = await mcpCall(request, 33, "session_start", {
+    trackId: track.data.id,
+    taskId: tasks.data[0].id,
+    plannedMinutes: 25,
+    idempotencyKey: "planning-active-session",
+  });
+
+  await loginAndSetup(page);
+  await page.goto("/goals");
+  const goalCard = page
+    .locator('[data-slot="card"]')
+    .filter({ hasText: "Protected active Goal" })
+    .first();
+  await goalCard.getByRole("button", { name: "完成" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "暂时无法完成 Goal" }),
+  ).toBeVisible();
+  await expect(page.getByText(/还有一段进行中的专注/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "返回当前专注" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/goals$/);
+
+  await mcpCall(request, 34, "session_cancel", { id: session.data.id });
 });
