@@ -76,23 +76,24 @@ export function TrackFocusCard({
       )}
       <CardHeader className={current ? "pl-7 sm:pl-9" : undefined}>
         <p className="font-mono text-xs tracking-[0.16em] text-stone-500 uppercase">
-          Current Next
+          即刻行动（当前下一步）
         </p>
         <CardTitle className="text-2xl sm:text-3xl">
           {current
             ? current.title
             : taskCount
-              ? "尚未选择下一步"
-              : "还没有任务"}
+              ? "尚未设定当前下一步"
+              : "还没有行动项"}
         </CardTitle>
       </CardHeader>
       <CardContent className={current ? "space-y-5 pl-7 sm:pl-9" : "space-y-4"}>
         <p className="max-w-2xl leading-6 text-stone-600">
           {current
-            ? current.description || "这是这条推进线现在唯一需要关注的下一步。"
+            ? current.description ||
+              "这是这条推进线现在唯一需要关注的即刻行动。"
             : taskCount
-              ? "从下方待处理任务中选择一个 Current Next。"
-              : "先添加一个任务，首个待处理任务会自动成为 Current Next。"}
+              ? "从下方待处理任务中选择一个作为当前下一步。"
+              : "先添加一个行动项，首个待办会自动成为当前下一步。"}
         </p>
 
         {current && (

@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 
 const links = [
-  { href: "/today", label: "今天", icon: SunMedium },
-  { href: "/goals", label: "计划", icon: ListTodo },
-  { href: "/history", label: "回顾", icon: History },
+  { href: "/today", label: "今日", icon: SunMedium },
+  { href: "/goals", label: "规划", icon: ListTodo },
+  { href: "/history", label: "印记", icon: History },
   { href: "/settings", label: "设置", icon: Settings },
 ];
 

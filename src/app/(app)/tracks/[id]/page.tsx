@@ -27,6 +27,11 @@ import { Label } from "@/components/ui/label";
 import { planningService, sessionService, settingsService } from "@/services";
 
 const context = { actor: "web" } as const;
+const statusLabel = {
+  active: "进行中",
+  completed: "已完成",
+  archived: "已归档",
+} as const;
 const textareaClass =
   "min-h-24 w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
 const selectClass =
@@ -76,13 +81,15 @@ export default async function TrackPage({
           render={<Link href="/goals" />}
         >
           <ArrowLeft />
-          返回 Goals
+          返回规划路线
         </Button>
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-                Track · {track.status}
+                推进线 ·{" "}
+                {statusLabel[track.status as keyof typeof statusLabel] ??
+                  track.status}
               </p>
             </div>
             <h1 className="text-4xl font-semibold tracking-tight">
@@ -103,7 +110,7 @@ export default async function TrackPage({
               />
             }
           >
-            {showArchived ? "隐藏 Archived" : "查看 Archived"}
+            {showArchived ? "隐藏已归档" : "查看已归档"}
           </Button>
         </div>
       </header>
@@ -121,9 +128,9 @@ export default async function TrackPage({
           <p className="font-medium text-stone-800">当前为只读状态</p>
           <p className="mt-1">
             {goal.status !== "active"
-              ? `所属 Goal「${goal.title}」已${goal.status === "completed" ? "完成" : "归档"}`
-              : `这个 Track 已${track.status === "completed" ? "完成" : "归档"}`}
-            ，请先在 Goals 页面重新启用，再修改任务或开始专注。
+              ? `所属长期目标「${goal.title}」已${goal.status === "completed" ? "完成" : "归档"}`
+              : `这个推进线已${track.status === "completed" ? "完成" : "归档"}`}
+            ，请先在规划路线页面重新启用，再修改任务或开始专注。
           </p>
         </div>
       )}
@@ -131,7 +138,7 @@ export default async function TrackPage({
       {canEdit && canReorderVisible ? (
         <SortableList
           key={visibleTasks.map((task) => task.id).join(":")}
-          label="调整任务顺序（不会改变 Current Next）"
+          label="调整行动项顺序（不会改变当前下一步）"
           items={visibleTasks.map((task) => ({
             id: task.id,
             label: task.title,
@@ -140,7 +147,7 @@ export default async function TrackPage({
         />
       ) : canEdit ? (
         <p className="text-xs text-stone-500">
-          要调整完整顺序，请先显示 Archived Task。
+          要调整完整顺序，请先显示已归档行动项。
         </p>
       ) : null}
 
@@ -148,9 +155,9 @@ export default async function TrackPage({
         <div className="flex items-end justify-between">
           <div>
             <p className="font-mono text-xs tracking-[0.16em] text-stone-500 uppercase">
-              任务列表
+              行动项清单
             </p>
-            <h2 className="text-2xl font-semibold">全部步骤</h2>
+            <h2 className="text-2xl font-semibold">推进步骤</h2>
           </div>
           <span className="text-sm text-stone-500">
             {visibleTasks.length} 项
@@ -158,7 +165,7 @@ export default async function TrackPage({
         </div>
         {visibleTasks.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-stone-300 p-10 text-center text-stone-600">
-            这里还没有任务。
+            这里还没有行动项。
           </div>
         ) : (
           visibleTasks.map((task) => {
@@ -266,7 +273,7 @@ export default async function TrackPage({
                               />
                               <ConfirmSubmit
                                 title={`跳过「${task.title}」？`}
-                                description="跳过后会保留这条任务记录；如果它是 Current Next，将自动推进到下一个待办任务。"
+                                description="跳过后会保留这条记录；如果它是当前下一步，将自动推进到下一个待办行动项。"
                                 confirmLabel="确认跳过"
                               >
                                 <SkipForward />
@@ -282,7 +289,7 @@ export default async function TrackPage({
                               />
                               <ConfirmSubmit
                                 title={`归档「${task.title}」？`}
-                                description="归档后任务会从默认列表中收起；内容不会被删除，之后仍可重新打开。"
+                                description="归档后行动项会从默认列表中收起；内容不会被删除，之后仍可重新打开。"
                                 confirmLabel="确认归档"
                               >
                                 归档

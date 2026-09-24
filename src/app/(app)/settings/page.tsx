@@ -8,13 +8,13 @@ export default async function SettingsPage() {
     <div className="max-w-2xl space-y-8">
       <header className="space-y-2">
         <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-          Instance
+          偏好与接入
         </p>
-        <h1 className="text-4xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-4xl font-semibold tracking-tight">系统偏好</h1>
       </header>
       <Card>
         <CardHeader>
-          <CardTitle>Time preferences</CardTitle>
+          <CardTitle>时间与专注节奏</CardTitle>
         </CardHeader>
         <CardContent>
           <SettingsForm
@@ -27,15 +27,23 @@ export default async function SettingsPage() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>MCP endpoint</CardTitle>
+          <CardTitle>AI 智能体接入端点 (MCP)</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm text-stone-600">
-          <code className="rounded bg-stone-100 px-2 py-1 text-stone-900">
-            /mcp
-          </code>
+        <CardContent className="space-y-3 text-sm text-stone-600">
           <p>
-            Authorization: Bearer YOUR_MCP_TOKEN。出于安全考虑，真实 Token
-            永不回显。
+            Time OS 支持通过 Model Context Protocol (MCP) 与 Claude
+            Code、Codex、ChatGPT 等 AI 工具无缝协作。
+            <strong>AI 负责规划与拆解，Time OS 负责保存状态并守护执行。</strong>
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-stone-500">端点地址：</span>
+            <code className="rounded bg-stone-100 px-2 py-1 font-mono text-stone-900">
+              /mcp
+            </code>
+          </div>
+          <p className="text-xs text-stone-500">
+            认证方式：Authorization: Bearer
+            YOUR_MCP_TOKEN。出于安全保护，已配置的真实 Token 永不在此回显。
           </p>
         </CardContent>
       </Card>

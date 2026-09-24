@@ -21,11 +21,18 @@ import type { Statistics } from "@/services/statistics";
 import { getZonedParts, localDateKey } from "@/shared/timezone";
 import { useCurrentSeconds } from "@/components/use-current-seconds";
 
+const statusZh: Record<string, string> = {
+  completed: "已完成",
+  active: "专注中",
+  paused: "已暂停",
+  cancelled: "已放弃",
+};
+
 function durationLabel(seconds: number) {
   const roundedMinutes = Math.round(seconds / 60);
   const hours = Math.floor(roundedMinutes / 60);
   const minutes = roundedMinutes % 60;
-  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  return hours ? `${hours}小时 ${minutes}分钟` : `${minutes}分钟`;
 }
 
 function localInputValue(date: Date | string, timezone: string) {
@@ -140,7 +147,7 @@ function SessionRow({
   }
 
   return (
-    <li className="rounded-xl border bg-white">
+    <li className="rounded-xl border bg-white shadow-2xs">
       <button
         type="button"
         onClick={loadDetail}
@@ -151,22 +158,25 @@ function SessionRow({
           <span className="flex flex-wrap items-center gap-2">
             <strong className="truncate">{session.track.title}</strong>
             <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">
-              {session.status}
+              {statusZh[session.status] ?? session.status}
             </span>
             {session.entryMode === "manual" && (
-              <span className="text-xs text-stone-500">manual</span>
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+                补录
+              </span>
             )}
           </span>
           <span className="mt-1 block truncate text-sm text-stone-600">
-            {session.task?.title ?? "Unstructured focus"} ·{" "}
-            {new Intl.DateTimeFormat("en", {
+            {session.task?.title ?? "自由专注"} ·{" "}
+            {new Intl.DateTimeFormat("zh-CN", {
               timeZone: timezone,
               hour: "2-digit",
               minute: "2-digit",
+              hour12: false,
             }).format(new Date(session.startedAt))}
           </span>
         </span>
-        <span className="shrink-0 font-mono text-sm font-medium">
+        <span className="shrink-0 font-mono text-sm font-medium text-stone-900">
           {durationLabel(sessionSeconds(session, nowSeconds))}
         </span>
       </button>
@@ -174,30 +184,31 @@ function SessionRow({
       {open && (
         <div className="space-y-5 border-t p-4">
           {pending && !detail ? (
-            <p className="text-sm text-stone-500">Loading details…</p>
+            <p className="text-sm text-stone-500">正在加载详情…</p>
           ) : (
             <>
               <dl className="grid gap-2 text-sm sm:grid-cols-2">
                 <div>
-                  <dt className="text-stone-500">Source</dt>
+                  <dt className="text-stone-500">记录方式</dt>
                   <dd>
-                    {session.entryMode} · {session.createdVia}
+                    {session.entryMode === "manual" ? "手动补录" : "实时计时"} ·{" "}
+                    {session.createdVia === "web" ? "网页端" : "智能体 (MCP)"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-stone-500">Paused</dt>
+                  <dt className="text-stone-500">累计暂停</dt>
                   <dd>{durationLabel(session.totalPausedSeconds)}</dd>
                 </div>
                 <div>
-                  <dt className="text-stone-500">Planned</dt>
+                  <dt className="text-stone-500">计划时长</dt>
                   <dd>
                     {session.plannedMinutes
-                      ? `${session.plannedMinutes}m`
+                      ? `${session.plannedMinutes} 分钟`
                       : "—"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-stone-500">Effective / wall time</dt>
+                  <dt className="text-stone-500">有效专注 / 经过时间</dt>
                   <dd>
                     {durationLabel(sessionSeconds(session, nowSeconds))} /{" "}
                     {session.endedAt
@@ -209,13 +220,13 @@ function SessionRow({
                               1000,
                           ),
                         )
-                      : "running"}
+                      : "进行中"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-stone-500">Started</dt>
+                  <dt className="text-stone-500">开始时间</dt>
                   <dd>
-                    {new Intl.DateTimeFormat("en", {
+                    {new Intl.DateTimeFormat("zh-CN", {
                       timeZone: timezone,
                       dateStyle: "medium",
                       timeStyle: "short",
@@ -223,21 +234,23 @@ function SessionRow({
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-stone-500">Ended</dt>
+                  <dt className="text-stone-500">结束时间</dt>
                   <dd>
                     {session.endedAt
-                      ? new Intl.DateTimeFormat("en", {
+                      ? new Intl.DateTimeFormat("zh-CN", {
                           timeZone: timezone,
                           dateStyle: "medium",
                           timeStyle: "short",
                         }).format(new Date(session.endedAt))
-                      : "Running"}
+                      : "进行中"}
                   </dd>
                 </div>
               </dl>
               <div className="text-sm">
-                <h3 className="text-stone-500">Note</h3>
-                <p className="whitespace-pre-wrap">{session.note || "—"}</p>
+                <h3 className="text-stone-500">本次推进交接笔记</h3>
+                <p className="whitespace-pre-wrap text-stone-800">
+                  {session.note || "—"}
+                </p>
               </div>
 
               {(session.status === "active" || session.status === "paused") && (
@@ -247,16 +260,16 @@ function SessionRow({
                   onClick={() => setCancelDialogOpen(true)}
                   className="rounded-lg px-3 py-2 text-sm text-red-700 hover:bg-red-50"
                 >
-                  Cancel Session
+                  放弃专注
                 </button>
               )}
 
               {session.status === "completed" && (
                 <div className="space-y-3 rounded-lg bg-stone-50 p-3">
-                  <h3 className="font-medium">Edit record</h3>
+                  <h3 className="font-medium text-stone-900">编辑专注记录</h3>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-sm">
-                      Track
+                      推进线
                       <select
                         value={trackId}
                         onChange={(event) => {
@@ -267,28 +280,32 @@ function SessionRow({
                       >
                         {targets.map((target) => (
                           <option key={target.track.id} value={target.track.id}>
-                            {target.track.title} ({target.track.status})
+                            {target.track.title} (
+                            {statusZh[target.track.status] ??
+                              target.track.status}
+                            )
                           </option>
                         ))}
                       </select>
                     </label>
                     <label className="text-sm">
-                      Task
+                      行动项
                       <select
                         value={taskId}
                         onChange={(event) => setTaskId(event.target.value)}
                         className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
                       >
-                        <option value="">No task</option>
+                        <option value="">未关联特定行动项</option>
                         {selectedTarget?.tasks.map((task) => (
                           <option key={task.id} value={task.id}>
-                            {task.title} ({task.status})
+                            {task.title} ({statusZh[task.status] ?? task.status}
+                            )
                           </option>
                         ))}
                       </select>
                     </label>
                     <label className="text-sm">
-                      Started
+                      开始时间
                       <input
                         type="datetime-local"
                         required
@@ -298,7 +315,7 @@ function SessionRow({
                       />
                     </label>
                     <label className="text-sm">
-                      Ended
+                      结束时间
                       <input
                         type="datetime-local"
                         required
@@ -308,7 +325,7 @@ function SessionRow({
                       />
                     </label>
                     <label className="text-sm">
-                      Planned minutes
+                      计划分钟
                       <input
                         type="number"
                         min="1"
@@ -320,7 +337,7 @@ function SessionRow({
                       />
                     </label>
                     <label className="text-sm sm:col-span-2">
-                      Note
+                      交接笔记
                       <textarea
                         value={note}
                         onChange={(event) => setNote(event.target.value)}
@@ -337,7 +354,7 @@ function SessionRow({
                       onClick={() => save(false)}
                       className="rounded-lg bg-stone-900 px-3 py-2 text-sm text-white disabled:opacity-50"
                     >
-                      Save changes
+                      保存修改
                     </button>
                     {overlap && (
                       <button
@@ -346,7 +363,7 @@ function SessionRow({
                         onClick={() => save(true)}
                         className="rounded-lg border border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-900"
                       >
-                        Confirm overlap
+                        确认重叠并保存
                       </button>
                     )}
                     <button
@@ -355,18 +372,16 @@ function SessionRow({
                       onClick={() => setCancelDialogOpen(true)}
                       className="rounded-lg px-3 py-2 text-sm text-red-700 hover:bg-red-50"
                     >
-                      Cancel Session
+                      放弃专注
                     </button>
                   </div>
                 </div>
               )}
 
               <div>
-                <h3 className="mb-2 font-medium">Distractions</h3>
+                <h3 className="mb-2 font-medium">暂存闪念</h3>
                 {!detail?.distractions.length ? (
-                  <p className="text-sm text-stone-500">
-                    No distractions recorded.
-                  </p>
+                  <p className="text-sm text-stone-500">本次专注未记录闪念。</p>
                 ) : (
                   <ul className="space-y-2">
                     {detail.distractions.map((distraction) => (
@@ -421,7 +436,7 @@ function DistractionRow({
         disabled={pending || Boolean(distraction.archivedAt)}
         onChange={(event) => setText(event.target.value)}
         className="h-8 min-w-0 flex-1 rounded-lg border px-2 text-sm"
-        aria-label="Distraction text"
+        aria-label="闪念内容"
       />
       {!distraction.archivedAt && (
         <>
@@ -439,7 +454,7 @@ function DistractionRow({
             }
             className="rounded-lg border px-2 text-xs"
           >
-            Save
+            保存
           </button>
           <button
             type="button"
@@ -452,9 +467,9 @@ function DistractionRow({
                 if (result.ok) onChanged();
               })
             }
-            className="rounded-lg px-2 text-xs text-red-700"
+            className="rounded-lg px-2 text-xs text-red-700 hover:bg-red-50"
           >
-            Archive
+            归档
           </button>
         </>
       )}
@@ -516,20 +531,18 @@ function AddSessionForm({
 
   if (!targets.length)
     return (
-      <p className="text-sm text-stone-500">
-        Create a Track before logging time.
-      </p>
+      <p className="text-sm text-stone-500">请先建立推进线，再补录专注记录。</p>
     );
 
   return (
     <section className="rounded-2xl border bg-stone-50 p-4 sm:p-5">
-      <h2 className="text-lg font-semibold">Add Session</h2>
+      <h2 className="text-lg font-semibold text-stone-900">补录专注时刻</h2>
       <p className="mt-1 text-sm text-stone-600">
-        Times use {timezone}. Manual records are completed immediately.
+        时间基准使用 {timezone} 时区。手动补录将立即记为已完成入账。
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-sm">
-          Track
+          推进线
           <select
             value={trackId}
             onChange={(event) => {
@@ -540,28 +553,29 @@ function AddSessionForm({
           >
             {targets.map((target) => (
               <option key={target.track.id} value={target.track.id}>
-                {target.track.title} ({target.track.status})
+                {target.track.title} (
+                {statusZh[target.track.status] ?? target.track.status})
               </option>
             ))}
           </select>
         </label>
         <label className="text-sm">
-          Task (optional)
+          行动项（可选）
           <select
             value={taskId}
             onChange={(event) => setTaskId(event.target.value)}
             className="mt-1 h-10 w-full rounded-lg border bg-white px-2"
           >
-            <option value="">No task</option>
+            <option value="">未关联特定行动项</option>
             {selectedTarget?.tasks.map((task) => (
               <option key={task.id} value={task.id}>
-                {task.title} ({task.status})
+                {task.title} ({statusZh[task.status] ?? task.status})
               </option>
             ))}
           </select>
         </label>
         <label className="text-sm">
-          Duration (minutes)
+          时长（分钟）
           <input
             type="number"
             min="1"
@@ -572,7 +586,7 @@ function AddSessionForm({
           />
         </label>
         <label className="text-sm">
-          Ended at
+          结束时间
           <input
             type="datetime-local"
             required
@@ -582,12 +596,13 @@ function AddSessionForm({
           />
         </label>
         <label className="text-sm sm:col-span-2 lg:col-span-4">
-          Note
+          交接笔记
           <textarea
             value={note}
             onChange={(event) => setNote(event.target.value)}
             rows={2}
-            className="mt-1 w-full rounded-lg border bg-white p-2"
+            placeholder="写下推进收获或断点思考..."
+            className="mt-1 w-full rounded-lg border bg-white p-2 text-sm"
           />
         </label>
       </div>
@@ -599,9 +614,9 @@ function AddSessionForm({
           type="button"
           disabled={pending || !trackId}
           onClick={() => submit(false)}
-          className="rounded-lg bg-stone-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+          className="rounded-lg bg-stone-900 px-4 py-2 text-sm text-white hover:bg-stone-800 disabled:opacity-50"
         >
-          {pending ? "Saving…" : "Add Session"}
+          {pending ? "正在保存…" : "补录专注"}
         </button>
         {overlap && (
           <button
@@ -610,7 +625,7 @@ function AddSessionForm({
             onClick={() => submit(true)}
             className="rounded-lg border border-amber-500 bg-amber-50 px-4 py-2 text-sm text-amber-900"
           >
-            Save anyway
+            仍然保存（允许重叠）
           </button>
         )}
       </div>
@@ -644,21 +659,15 @@ export function HistoryView({
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-5">
-        <Stat
-          label="Today focus"
-          value={durationLabel(today.totalFocusSeconds)}
-        />
-        <Stat
-          label="Week focus"
-          value={durationLabel(week.totalFocusSeconds)}
-        />
-        <Stat label="Week sessions" value={String(week.sessionCount)} />
-        <Stat label="Completed tasks" value={String(week.completedTaskCount)} />
-        <Stat label="Focus days" value={String(week.focusDays)} />
+        <Stat label="今日专注" value={durationLabel(today.totalFocusSeconds)} />
+        <Stat label="本周专注" value={durationLabel(week.totalFocusSeconds)} />
+        <Stat label="本周专注频次" value={`${week.sessionCount} 次`} />
+        <Stat label="已达成行动项" value={`${week.completedTaskCount} 个`} />
+        <Stat label="践行天数" value={`${week.focusDays} 天`} />
       </div>
       {week.byTrack.length > 0 && (
-        <section className="rounded-xl border bg-white p-4">
-          <h2 className="font-semibold">Track distribution · this week</h2>
+        <section className="rounded-xl border bg-white p-4 shadow-2xs">
+          <h2 className="font-semibold text-stone-900">本周推进线精力分布</h2>
           <ul className="mt-3 space-y-2">
             {week.byTrack.map((track) => (
               <li
@@ -667,7 +676,9 @@ export function HistoryView({
               >
                 <span>
                   {track.title}{" "}
-                  <span className="text-stone-400">({track.status})</span>
+                  <span className="text-stone-400">
+                    ({statusZh[track.status] ?? track.status})
+                  </span>
                 </span>
                 <strong>{durationLabel(track.focusSeconds)}</strong>
               </li>
@@ -678,19 +689,20 @@ export function HistoryView({
       <AddSessionForm targets={targets} timezone={timezone} />
       {!sessions.length ? (
         <div className="rounded-2xl border border-dashed p-10 text-center text-stone-500">
-          No Sessions match these filters.
+          没有找到符合筛选条件的专注记录。
         </div>
       ) : (
         [...groups.entries()].map(([date, items]) => (
           <section key={date} className="space-y-2">
             <div className="flex items-baseline justify-between">
-              <h2 className="text-lg font-semibold">
-                {new Intl.DateTimeFormat("en", {
+              <h2 className="text-lg font-semibold text-stone-900">
+                {new Intl.DateTimeFormat("zh-CN", {
                   timeZone: "UTC",
                   dateStyle: "full",
                 }).format(new Date(`${date}T12:00:00Z`))}
               </h2>
-              <span className="text-sm text-stone-500">
+              <span className="font-mono text-sm text-stone-500">
+                当日投入{" "}
                 {durationLabel(
                   items.reduce(
                     (sum, item) => sum + sessionSeconds(item, nowSeconds),

@@ -47,7 +47,7 @@ export function SettingsForm(props: SettingsFormProps) {
       <input type="hidden" name="mode" value={props.mode} />
       <FieldGroup>
         <Field>
-          <FieldLabel htmlFor="timezone">Timezone</FieldLabel>
+          <FieldLabel htmlFor="timezone">所在时区</FieldLabel>
           <Input
             ref={timezoneInput}
             id="timezone"
@@ -56,11 +56,13 @@ export function SettingsForm(props: SettingsFormProps) {
             required
           />
           <FieldDescription>
-            使用 IANA 名称，例如 Asia/Shanghai。
+            使用 IANA 时区名称，例如 Asia/Shanghai。
           </FieldDescription>
         </Field>
         <Field>
-          <FieldLabel htmlFor="defaultFocusMinutes">Default focus</FieldLabel>
+          <FieldLabel htmlFor="defaultFocusMinutes">
+            默认专注时长（分钟）
+          </FieldLabel>
           <Input
             id="defaultFocusMinutes"
             name="defaultFocusMinutes"
@@ -70,10 +72,12 @@ export function SettingsForm(props: SettingsFormProps) {
             defaultValue={props.defaultFocusMinutes}
             required
           />
-          <FieldDescription>新 Focus Session 的默认分钟数。</FieldDescription>
+          <FieldDescription>
+            开启新专注时刻的默认预设计时时长。
+          </FieldDescription>
         </Field>
         <Field>
-          <FieldLabel htmlFor="weekStartsOn">Week starts on</FieldLabel>
+          <FieldLabel htmlFor="weekStartsOn">每周起始日</FieldLabel>
           <select
             id="weekStartsOn"
             name="weekStartsOn"
@@ -81,8 +85,8 @@ export function SettingsForm(props: SettingsFormProps) {
             className="border-input bg-background h-9 rounded-lg border px-3 text-sm"
             required
           >
-            <option value="1">Monday</option>
-            <option value="0">Sunday</option>
+            <option value="1">周一 (Monday)</option>
+            <option value="0">周日 (Sunday)</option>
           </select>
         </Field>
       </FieldGroup>
@@ -95,7 +99,7 @@ export function SettingsForm(props: SettingsFormProps) {
         {pending
           ? "正在保存…"
           : props.mode === "setup"
-            ? "完成 Setup"
+            ? "完成初始化"
             : "保存设置"}
       </Button>
     </form>

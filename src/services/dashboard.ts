@@ -26,6 +26,8 @@ export interface ActiveTrackItem {
   goal: Goal;
   currentNextTask: Task | null;
   todayFocusSeconds: number;
+  lastSessionNote?: string | null;
+  lastSessionAt?: Date | null;
 }
 
 export interface DashboardData {
@@ -94,45 +96,51 @@ export function createDashboardService(
         .map((row) => row.track.currentTaskId)
         .filter((id): id is string => id != null);
 
-      const canSelectWithoutDb =
-        (options?.manualTrackId != null &&
-          activeTrackRows.some(
-            (row) => row.track.id === options.manualTrackId,
-          )) ||
-        (settings.selectedTrackId != null &&
-          activeTrackRows.some(
-            (row) => row.track.id === settings.selectedTrackId,
-          ));
-      const needsRecentSession =
-        !canSelectWithoutDb && activeTrackRows.length > 0;
+      const allActiveTrackIds = activeTrackRows.map((row) => row.track.id);
 
       const nextTasksPromise: Promise<Task[]> =
         taskIds.length > 0
           ? database.select().from(tasks).where(inArray(tasks.id, taskIds))
           : Promise.resolve([]);
 
-      const recentSessionPromise: Promise<{ trackId: string }[]> =
-        needsRecentSession
+      // Fetch recent sessions among active tracks to attach the last handover note
+      // and determine the most recent active track fallback.
+      const recentSessionsPromise =
+        allActiveTrackIds.length > 0
           ? database
-              .select({ trackId: sessions.trackId })
+              .select({
+                trackId: sessions.trackId,
+                note: sessions.note,
+                endedAt: sessions.endedAt,
+                startedAt: sessions.startedAt,
+              })
               .from(sessions)
               .where(
                 and(
                   ne(sessions.status, "cancelled"),
-                  inArray(
-                    sessions.trackId,
-                    activeTrackRows.map((row) => row.track.id),
-                  ),
+                  inArray(sessions.trackId, allActiveTrackIds),
                 ),
               )
               .orderBy(desc(sessions.startedAt))
-              .limit(1)
           : Promise.resolve([]);
 
       const [nextTasks, recentSessions] = await Promise.all([
         nextTasksPromise,
-        recentSessionPromise,
+        recentSessionsPromise,
       ]);
+
+      const lastSessionMap = new Map<
+        string,
+        { note: string | null; at: Date }
+      >();
+      for (const s of recentSessions) {
+        if (!lastSessionMap.has(s.trackId)) {
+          lastSessionMap.set(s.trackId, {
+            note: s.note,
+            at: s.endedAt ?? s.startedAt,
+          });
+        }
+      }
 
       const nextTaskMap = new Map<string, Task>();
       for (const t of nextTasks) {
@@ -143,12 +151,15 @@ export function createDashboardService(
         const nextTask = row.track.currentTaskId
           ? (nextTaskMap.get(row.track.currentTaskId) ?? null)
           : null;
+        const lastSession = lastSessionMap.get(row.track.id);
 
         activeTracks.push({
           track: row.track,
           goal: row.goal,
           currentNextTask: nextTask,
           todayFocusSeconds: trackFocusSeconds.get(row.track.id) ?? 0,
+          lastSessionNote: lastSession?.note ?? null,
+          lastSessionAt: lastSession?.at ?? null,
         });
       }
 

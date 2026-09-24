@@ -38,10 +38,10 @@ export function DistractionPanel({
       <CardContent className="space-y-4 p-5 sm:p-6">
         <div className="flex items-center justify-between">
           <span className="font-mono text-xs font-medium tracking-wider text-stone-500 uppercase">
-            Distractions (按 D 快速记录)
+            闪念暂存盒 (按 D 快速记录)
           </span>
           <span className="font-mono text-xs text-stone-400">
-            {distractions.list.length} 条打断
+            {distractions.list.length} 条闪念
           </span>
         </div>
 
@@ -51,11 +51,11 @@ export function DistractionPanel({
             ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="记录打断 (可留空)..."
+            placeholder="随手记下一闪而过的杂念，回车暂存..."
             className="h-9 text-sm"
           />
           <Button type="submit" size="sm" variant="outline" className="h-9">
-            记录
+            暂存
           </Button>
         </form>
 

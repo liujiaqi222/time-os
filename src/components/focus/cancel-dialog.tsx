@@ -33,7 +33,7 @@ export function CancelDialog({
 
       <div className="flex items-center justify-end gap-3 pt-2">
         <Button variant="ghost" disabled={isPending} onClick={onClose}>
-          保留本次专注
+          继续专注
         </Button>
         <Button
           variant="outline"
@@ -41,7 +41,7 @@ export function CancelDialog({
           onClick={onConfirm}
           className="border-red-200 text-red-700 hover:bg-red-50"
         >
-          确定取消
+          放弃专注
         </Button>
       </div>
     </Modal>
