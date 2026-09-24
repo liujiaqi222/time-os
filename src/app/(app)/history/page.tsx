@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { HistoryView } from "@/components/history-view";
 import { historyService, settingsService, statisticsService } from "@/services";
+import { goalTrackStatusLabel } from "@/shared/labels";
 import { addLocalDays, localDateStart } from "@/shared/timezone";
 
 interface HistorySearchParams {
@@ -109,7 +110,7 @@ export default async function HistoryPage({
             <option value="">全部推进线</option>
             {targets.map(({ track }) => (
               <option key={track.id} value={track.id}>
-                {track.title} ({track.status})
+                {track.title} ({goalTrackStatusLabel[track.status]})
               </option>
             ))}
           </select>
