@@ -47,7 +47,7 @@ export function SettingsForm(props: SettingsFormProps) {
       <input type="hidden" name="mode" value={props.mode} />
       <FieldGroup>
         <Field>
-          <FieldLabel htmlFor="timezone">Timezone</FieldLabel>
+          <FieldLabel htmlFor="timezone">时区</FieldLabel>
           <Input
             ref={timezoneInput}
             id="timezone"
@@ -60,7 +60,7 @@ export function SettingsForm(props: SettingsFormProps) {
           </FieldDescription>
         </Field>
         <Field>
-          <FieldLabel htmlFor="defaultFocusMinutes">Default focus</FieldLabel>
+          <FieldLabel htmlFor="defaultFocusMinutes">默认专注时长</FieldLabel>
           <Input
             id="defaultFocusMinutes"
             name="defaultFocusMinutes"
@@ -70,10 +70,10 @@ export function SettingsForm(props: SettingsFormProps) {
             defaultValue={props.defaultFocusMinutes}
             required
           />
-          <FieldDescription>新 Focus Session 的默认分钟数。</FieldDescription>
+          <FieldDescription>新专注的默认分钟数。</FieldDescription>
         </Field>
         <Field>
-          <FieldLabel htmlFor="weekStartsOn">Week starts on</FieldLabel>
+          <FieldLabel htmlFor="weekStartsOn">每周开始于</FieldLabel>
           <select
             id="weekStartsOn"
             name="weekStartsOn"
@@ -81,8 +81,8 @@ export function SettingsForm(props: SettingsFormProps) {
             className="border-input bg-background h-9 rounded-lg border px-3 text-sm"
             required
           >
-            <option value="1">Monday</option>
-            <option value="0">Sunday</option>
+            <option value="1">周一</option>
+            <option value="0">周日</option>
           </select>
         </Field>
       </FieldGroup>
@@ -95,7 +95,7 @@ export function SettingsForm(props: SettingsFormProps) {
         {pending
           ? "正在保存…"
           : props.mode === "setup"
-            ? "完成 Setup"
+            ? "完成设置"
             : "保存设置"}
       </Button>
     </form>

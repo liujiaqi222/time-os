@@ -33,7 +33,7 @@ export function ActiveSessionBanner({
   return (
     <div
       role="region"
-      aria-label="Active focus session banner"
+      aria-label="进行中的专注提示条"
       className="border-b border-amber-200/80 bg-amber-50/90 text-stone-900 transition-colors"
     >
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-2.5 sm:flex-nowrap">
@@ -48,7 +48,7 @@ export function ActiveSessionBanner({
             {isPaused ? (
               <>
                 <Pause className="size-3" aria-hidden="true" />
-                Paused
+                已暂停
               </>
             ) : (
               <>
@@ -56,7 +56,7 @@ export function ActiveSessionBanner({
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                   <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
                 </span>
-                Focusing
+                专注中
               </>
             )}
           </span>
@@ -85,7 +85,7 @@ export function ActiveSessionBanner({
             className="h-8 gap-1.5 text-xs"
             render={<Link href={`/focus/${session.id}`} />}
           >
-            Return to focus
+            返回正在进行的专注
             <ArrowRight className="size-3.5" aria-hidden="true" />
           </Button>
         </div>
