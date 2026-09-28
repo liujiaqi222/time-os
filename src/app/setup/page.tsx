@@ -20,10 +20,10 @@ export default async function SetupPage() {
       <main className="mx-auto flex min-h-screen max-w-2xl items-center px-5 py-12">
         <Alert variant="destructive">
           <Database aria-hidden="true" />
-          <AlertTitle>数据库 schema 尚未就绪</AlertTitle>
+          <AlertTitle>数据库结构尚未就绪</AlertTitle>
           <AlertDescription>
-            确认 DATABASE_URL 可连接，然后执行 pnpm db:migrate。Setup
-            不会自行修改 schema。
+            确认 DATABASE_URL 可连接，然后执行 pnpm db:migrate。首次配置
+            不会自行修改数据库结构。
           </AlertDescription>
         </Alert>
       </main>
@@ -40,7 +40,7 @@ export default async function SetupPage() {
       <div className="mx-auto max-w-3xl space-y-8">
         <header className="space-y-3">
           <p className="font-mono text-xs tracking-[0.2em] text-stone-500 uppercase">
-            First run
+            首次配置
           </p>
           <h1 className="text-4xl font-semibold tracking-tight">
             设置你的执行环境
@@ -51,15 +51,13 @@ export default async function SetupPage() {
         </header>
         <Alert>
           <CheckCircle2 aria-hidden="true" />
-          <AlertTitle>Database ready</AlertTitle>
-          <AlertDescription>
-            连接与 committed migration 检查通过。
-          </AlertDescription>
+          <AlertTitle>数据库已就绪</AlertTitle>
+          <AlertDescription>连接与数据库迁移检查通过。</AlertDescription>
         </Alert>
         <div className="grid gap-6 md:grid-cols-[1fr_0.9fr]">
           <Card>
             <CardHeader>
-              <CardTitle>Time settings</CardTitle>
+              <CardTitle>时间设置</CardTitle>
             </CardHeader>
             <CardContent>
               <SettingsForm
@@ -75,7 +73,7 @@ export default async function SetupPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <PlugZap className="size-5" />
-                MCP connection
+                MCP 连接
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">

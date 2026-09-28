@@ -194,7 +194,7 @@ export function FocusView({
             className="flex items-center gap-2 text-sm text-stone-600 transition hover:text-stone-900"
           >
             <ArrowLeft className="size-4" aria-hidden="true" />
-            <span>返回 Today</span>
+            <span>返回今天</span>
           </Link>
 
           <span
@@ -240,7 +240,7 @@ export function FocusView({
               {session.track.title}
             </p>
             <h1 className="text-2xl font-semibold tracking-tight text-stone-900 sm:text-3xl">
-              {session.task?.title ?? "无结构专注 (Unstructured Focus)"}
+              {session.task?.title ?? "自由专注（无任务）"}
             </h1>
             {session.task?.description && (
               <p className="mx-auto max-w-lg text-sm text-stone-600">
@@ -270,11 +270,10 @@ export function FocusView({
             <p className="mt-3 font-mono text-xs text-stone-500">
               {isOvertime ? (
                 <span className="font-medium text-amber-700">
-                  已超时 (Overtime) · 累计已专注{" "}
-                  {formatHumanDuration(elapsedSeconds)}
+                  已超出计划 · 累计已专注 {formatHumanDuration(elapsedSeconds)}
                 </span>
               ) : plannedSeconds ? (
-                <span>剩余时间 (计划 {session.plannedMinutes} 分钟)</span>
+                <span>剩余时间（计划 {session.plannedMinutes} 分钟）</span>
               ) : (
                 <span>已专注时长</span>
               )}
@@ -332,12 +331,12 @@ export function FocusView({
                   htmlFor="focus-note"
                   className="font-mono text-xs font-medium tracking-wider text-stone-500 uppercase"
                 >
-                  Quick Note
+                  随手记
                 </label>
                 <span className="font-mono text-xs text-stone-400">
-                  {noteStatus === "saving" && "Saving..."}
-                  {noteStatus === "saved" && "Saved"}
-                  {noteStatus === "error" && "Error saving"}
+                  {noteStatus === "saving" && "保存中…"}
+                  {noteStatus === "saved" && "已保存"}
+                  {noteStatus === "error" && "保存失败"}
                 </span>
               </div>
               <textarea
@@ -345,7 +344,7 @@ export function FocusView({
                 rows={3}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="记录灵感、进展或下一步想法 (自动保存)..."
+                placeholder="记录想法、进展或下一步（自动保存）…"
                 className="w-full resize-none rounded-lg border border-stone-200 bg-transparent p-3 text-sm placeholder:text-stone-400 focus:border-stone-900 focus:outline-hidden"
               />
             </CardContent>

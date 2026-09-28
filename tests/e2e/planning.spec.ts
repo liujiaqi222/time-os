@@ -14,8 +14,8 @@ async function loginAndSetup(page: Page) {
   await page.getByRole("button", { name: "进入 Time OS" }).click();
   await page.waitForURL(/\/(setup|today)$/);
   await page.goto("/setup");
-  await page.getByLabel("Timezone").fill("Asia/Shanghai");
-  await page.getByRole("button", { name: "完成 Setup" }).click();
+  await page.getByLabel("时区").fill("Asia/Shanghai");
+  await page.getByRole("button", { name: "完成设置" }).click();
   await page.waitForURL(/\/today$/);
 }
 
@@ -55,19 +55,19 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
 }) => {
   await loginAndSetup(page);
   await page.goto("/goals");
-  await page.getByText("新建 Goal", { exact: true }).click();
+  await page.getByText("新建目标", { exact: true }).click();
   await page
     .getByPlaceholder("例如：发布 Time OS MVP")
     .fill("Ship planning flow");
-  await page.getByRole("button", { name: "创建 Goal" }).click();
+  await page.getByRole("button", { name: "创建目标" }).click();
 
   const goalCard = page
     .locator('[data-slot="card"]')
     .filter({ hasText: "Ship planning flow" })
     .first();
-  await goalCard.getByText("＋ 添加 Track", { exact: true }).click();
-  await goalCard.getByLabel("Track 名称").fill("Core workflow");
-  await goalCard.getByRole("button", { name: "创建 Track" }).click();
+  await goalCard.getByText("＋ 添加推进线", { exact: true }).click();
+  await goalCard.getByLabel("推进线名称").fill("Core workflow");
+  await goalCard.getByRole("button", { name: "创建推进线" }).click();
   await page.getByRole("link", { name: "Core workflow" }).click();
 
   await page.getByText("批量粘贴", { exact: true }).click();
@@ -81,7 +81,7 @@ test("Web maintains a plan and Current Next across reorder, completion, and reop
   ).toBeVisible();
 
   const reorder = page.getByRole("region", {
-    name: "调整任务顺序（不会改变 Current Next）",
+    name: "调整任务顺序（不会改变下一步）",
   });
   await reorder
     .getByRole("button", { name: "Third task", exact: true })
@@ -171,7 +171,7 @@ test("completing a Goal with an active Session stays in an actionable dialog", a
   await goalCard.getByRole("button", { name: "完成" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "暂时无法完成 Goal" }),
+    page.getByRole("heading", { name: "暂时无法完成目标" }),
   ).toBeVisible();
   await expect(page.getByText(/还有一段进行中的专注/)).toBeVisible();
   await expect(

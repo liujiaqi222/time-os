@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { HistoryView } from "@/components/history-view";
 import { historyService, settingsService, statisticsService } from "@/services";
+import { goalTrackStatusLabel } from "@/shared/labels";
 import { addLocalDays, localDateStart } from "@/shared/timezone";
 
 interface HistorySearchParams {
@@ -74,15 +75,15 @@ export default async function HistoryPage({
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-4xl font-semibold tracking-tight">History</h1>
+        <h1 className="text-4xl font-semibold tracking-tight">回顾</h1>
         <p className="mt-2 text-stone-600">
-          Trusted focus records and statistics in {settings.timezone}.
+          可信的专注记录与统计，按 {settings.timezone} 时区计算。
         </p>
       </header>
 
       <form className="grid gap-3 rounded-xl border bg-white p-4 sm:grid-cols-4">
         <label className="text-sm">
-          From
+          从
           <input
             type="date"
             name="from"
@@ -91,7 +92,7 @@ export default async function HistoryPage({
           />
         </label>
         <label className="text-sm">
-          To
+          到
           <input
             type="date"
             name="to"
@@ -100,16 +101,16 @@ export default async function HistoryPage({
           />
         </label>
         <label className="text-sm">
-          Track
+          推进线
           <select
             name="trackId"
             defaultValue={query.trackId ?? ""}
             className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
           >
-            <option value="">All Tracks</option>
+            <option value="">全部推进线</option>
             {targets.map(({ track }) => (
               <option key={track.id} value={track.id}>
-                {track.title} ({track.status})
+                {track.title} ({goalTrackStatusLabel[track.status]})
               </option>
             ))}
           </select>
@@ -122,10 +123,10 @@ export default async function HistoryPage({
               value="true"
               defaultChecked={query.includeCancelled === "true"}
             />
-            Audit cancelled
+            含已取消
           </label>
           <button className="h-9 rounded-lg bg-stone-900 px-3 text-sm text-white">
-            Apply
+            应用
           </button>
         </div>
       </form>
@@ -134,8 +135,7 @@ export default async function HistoryPage({
           role="alert"
           className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"
         >
-          The start date must be on or before the end date. Filters were not
-          applied.
+          开始日期必须早于或等于结束日期，筛选未生效。
         </p>
       )}
 
@@ -153,7 +153,7 @@ export default async function HistoryPage({
             href={`/history?${nextParams.toString()}`}
             className="rounded-lg border bg-white px-4 py-2 text-sm hover:bg-stone-50"
           >
-            Load older Sessions
+            加载更早的专注记录
           </Link>
         </div>
       )}

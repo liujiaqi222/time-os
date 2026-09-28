@@ -70,10 +70,10 @@ export function formatHumanDuration(totalSeconds: number): string {
   const seconds = safeSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return `${hours}时 ${minutes}分`;
   }
   if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
+    return `${minutes}分 ${seconds}秒`;
   }
-  return `${seconds}s`;
+  return `${seconds}秒`;
 }

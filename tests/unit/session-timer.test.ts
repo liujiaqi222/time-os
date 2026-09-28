@@ -90,8 +90,8 @@ describe("session-timer", () => {
   });
 
   it("formats human duration correctly", () => {
-    expect(formatHumanDuration(45)).toBe("45s");
-    expect(formatHumanDuration(125)).toBe("2m 5s");
-    expect(formatHumanDuration(3720)).toBe("1h 2m");
+    expect(formatHumanDuration(45)).toBe("45秒");
+    expect(formatHumanDuration(125)).toBe("2分 5秒");
+    expect(formatHumanDuration(3720)).toBe("1时 2分");
   });
 });

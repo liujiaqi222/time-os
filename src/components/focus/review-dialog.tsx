@@ -56,10 +56,10 @@ export function ReviewDialog({
             id="review-dialog-title"
             className="text-2xl font-semibold text-stone-900"
           >
-            专注回顾 (Finish Review)
+            专注回顾
           </h2>
           <p className="mt-1 text-sm text-stone-500">
-            确认实际执行成果，完成状态将原子保存到数据表。
+            收尾并记录这次专注的结果。
           </p>
         </div>
         <button
@@ -91,7 +91,7 @@ export function ReviewDialog({
       {session.taskId ? (
         <div className="space-y-3">
           <label className="text-xs font-medium tracking-wider text-stone-500 uppercase">
-            当前任务结算
+            这个任务完成得怎么样？
           </label>
           <div className="space-y-2">
             <label
@@ -110,12 +110,13 @@ export function ReviewDialog({
                 className="mt-0.5"
               />
               <div>
-                <p className="font-medium text-stone-900">
-                  标记已完成 (Completed)
-                </p>
+                <p className="font-medium text-stone-900">这个任务做完了</p>
                 <p className="text-xs text-stone-500">
-                  将任务标记为已完成，自动推进 Current Next 到下一个待办任务
-                  {nextTaskPreviewTitle && ` (预计：${nextTaskPreviewTitle})`}。
+                  任务标记为已完成
+                  {nextTaskPreviewTitle
+                    ? `，下一步自动换成「${nextTaskPreviewTitle}」`
+                    : "，自动推进到下一个待办任务"}
+                  。
                 </p>
               </div>
             </label>
@@ -136,11 +137,9 @@ export function ReviewDialog({
                 className="mt-0.5"
               />
               <div>
-                <p className="font-medium text-stone-900">
-                  稍后继续 (Continue later)
-                </p>
+                <p className="font-medium text-stone-900">这次先到这</p>
                 <p className="text-xs text-stone-500">
-                  仅结束本次 Session 计时，保留任务为 Pending 和 Current Next。
+                  只结束本次计时，任务仍保持待办，下次从这里继续。
                 </p>
               </div>
             </label>
@@ -161,9 +160,9 @@ export function ReviewDialog({
                 className="mt-0.5"
               />
               <div>
-                <p className="font-medium text-stone-900">跳过任务 (Skip)</p>
+                <p className="font-medium text-stone-900">跳过它</p>
                 <p className="text-xs text-stone-500">
-                  将任务标记为 Skipped，自动推进 Current Next 到下一项。
+                  任务标记为已跳过，下一步自动换成下一件。
                 </p>
               </div>
             </label>
@@ -171,7 +170,7 @@ export function ReviewDialog({
         </div>
       ) : (
         <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 text-sm text-stone-700">
-          本次为无结构专注 (无关联任务)，结束计时后将归档到今日统计中。
+          本次是自由专注（没有关联任务），结束后会计入今天的统计。
         </div>
       )}
 
@@ -181,7 +180,7 @@ export function ReviewDialog({
           htmlFor="review-note"
           className="text-xs font-medium tracking-wider text-stone-500 uppercase"
         >
-          专注笔记 (Session Note)
+          专注笔记
         </label>
         <textarea
           id="review-note"
@@ -215,7 +214,7 @@ export function ReviewDialog({
           {submitting && (
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
           )}
-          确认完成
+          结束专注
         </Button>
       </div>
     </Modal>

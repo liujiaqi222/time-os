@@ -55,7 +55,7 @@ export function SortableList({
         {pending && (
           <LoaderCircle
             className="size-4 animate-spin"
-            aria-label="Saving order"
+            aria-label="正在保存顺序"
           />
         )}
       </div>

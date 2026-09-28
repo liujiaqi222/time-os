@@ -8,8 +8,8 @@ async function loginAndSetup(page: Page) {
   await page.getByRole("button", { name: "进入 Time OS" }).click();
   await page.waitForURL(/\/(setup|today)$/);
   if (page.url().endsWith("/setup")) {
-    await page.getByLabel("Timezone").fill("Asia/Shanghai");
-    await page.getByRole("button", { name: "完成 Setup" }).click();
+    await page.getByLabel("时区").fill("Asia/Shanghai");
+    await page.getByRole("button", { name: "完成设置" }).click();
     await page.waitForURL(/\/today$/);
   }
 }
@@ -40,20 +40,20 @@ test.describe("Focus execution loop", () => {
 
     // 1. Create a Goal and Track with two tasks
     await page.goto("/goals");
-    await page.getByText("新建 Goal", { exact: true }).click();
+    await page.getByText("新建目标", { exact: true }).click();
     await page
       .getByPlaceholder("例如：发布 Time OS MVP")
       .fill("Ship Focus Loop");
-    await page.getByRole("button", { name: "创建 Goal" }).click();
+    await page.getByRole("button", { name: "创建目标" }).click();
     await expect(page.getByText("Ship Focus Loop").first()).toBeVisible();
 
     const goalCard = page
       .locator('[data-slot="card"]')
       .filter({ hasText: "Ship Focus Loop" })
       .first();
-    await goalCard.getByText("＋ 添加 Track", { exact: true }).click();
-    await goalCard.getByLabel("Track 名称").fill("Track Execution");
-    await goalCard.getByRole("button", { name: "创建 Track" }).click();
+    await goalCard.getByText("＋ 添加推进线", { exact: true }).click();
+    await goalCard.getByLabel("推进线名称").fill("Track Execution");
+    await goalCard.getByRole("button", { name: "创建推进线" }).click();
     await page.getByRole("link", { name: "Track Execution" }).first().click();
     await page.waitForURL(/\/tracks\/.+/);
     const trackId = page.url().split("/").pop()!;
@@ -93,9 +93,9 @@ test.describe("Focus execution loop", () => {
     await expect(page.getByRole("button", { name: /暂停/ })).toBeVisible();
 
     // 4. Quick Note autosave & reload recovery
-    const noteArea = page.getByPlaceholder(/记录灵感/);
+    const noteArea = page.getByPlaceholder(/记录想法/);
     await noteArea.fill("Important thoughts during focus");
-    await expect(page.getByText("Saved")).toBeVisible();
+    await expect(page.getByText("已保存")).toBeVisible();
 
     await page.reload();
     await expect(noteArea).toHaveValue("Important thoughts during focus");
@@ -111,11 +111,11 @@ test.describe("Focus execution loop", () => {
     await expect(page.getByRole("heading", { name: /专注回顾/ })).toBeVisible();
 
     // Radio for Completed
-    const completedRadio = page.getByRole("radio", { name: /标记已完成/ });
+    const completedRadio = page.getByRole("radio", { name: /这个任务做完了/ });
     await expect(completedRadio).toBeChecked();
 
     // Submit review
-    await page.getByRole("button", { name: "确认完成" }).click();
+    await page.getByRole("button", { name: "结束专注" }).click();
 
     // 7. Verify redirection and advancement
     await page.waitForURL(/\/today$/);
@@ -187,13 +187,13 @@ test.describe("Focus execution loop", () => {
 
     // Global active banner should be visible
     const banner = page.getByRole("region", {
-      name: "Active focus session banner",
+      name: "进行中的专注提示条",
     });
     await expect(banner).toBeVisible();
-    await expect(banner.getByText("Return to focus")).toBeVisible();
+    await expect(banner.getByText("返回正在进行的专注")).toBeVisible();
 
     // Click Return to focus
-    await banner.getByText("Return to focus").click();
+    await banner.getByText("返回正在进行的专注").click();
     await page.waitForURL(/\/focus\/[0-9a-f-]+/);
 
     // Clean up
@@ -224,7 +224,7 @@ test.describe("Focus execution loop", () => {
 
     // The session should still be active — verify overtime indicator is shown
     // and Pause/Finish buttons are still available (not auto-finished)
-    await expect(page.getByText(/超时|Overtime/i)).toBeVisible();
+    await expect(page.getByText(/已超出计划/)).toBeVisible();
     await expect(page.getByRole("button", { name: /暂停|继续/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /完成/ })).toBeVisible();
 

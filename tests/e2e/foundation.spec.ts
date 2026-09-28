@@ -26,15 +26,15 @@ test("login, setup, cookie persistence, and logout", async ({ page }) => {
   await page.getByLabel("实例密码").fill(webPassword);
   await page.getByRole("button", { name: "进入 Time OS" }).click();
   await expect(page).toHaveURL(/\/setup$/);
-  await expect(page.getByText("Database ready")).toBeVisible();
+  await expect(page.getByText("数据库已就绪")).toBeVisible();
 
-  await page.getByLabel("Timezone").fill("Asia/Shanghai");
-  await page.getByLabel("Default focus").fill("30");
-  await page.getByRole("button", { name: "完成 Setup" }).click();
+  await page.getByLabel("时区").fill("Asia/Shanghai");
+  await page.getByLabel("默认专注时长").fill("30");
+  await page.getByRole("button", { name: "完成设置" }).click();
 
   await expect(page).toHaveURL(/\/today$/);
   await expect(
-    page.getByRole("heading", { name: "还没有可执行的 Track" }),
+    page.getByRole("heading", { name: "还没有可执行的推进线" }),
   ).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(/\/today$/);

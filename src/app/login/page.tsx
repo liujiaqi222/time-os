@@ -18,7 +18,7 @@ export default async function LoginPage({
       <div className="w-full max-w-md">
         <div className="mb-8 space-y-2">
           <p className="font-mono text-xs tracking-[0.2em] text-stone-500 uppercase">
-            Execution system
+            执行系统
           </p>
           <h1 className="text-4xl font-semibold tracking-tight text-stone-950">
             Time OS
