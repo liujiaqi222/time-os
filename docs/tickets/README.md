@@ -2,19 +2,19 @@
 
 当前依据：[PRD v0.3](../prd.md)。体验说明：[产品方向](../product-direction-v0.3.md)。
 
-**状态：**T06–T10 是本地可发布的 issue 正文，尚未发布到 GitHub，也未开始代码实现。编号是文档编号，不预设未来 GitHub issue 号码。
+**状态：**T06–T10 已在 GitHub 创建对应 Issue（#25–#29），待按序进行代码实现。
 
 **实施边界：**前端与服务端按 v3 直接重构；不做旧库迁移、Track 映射、接口兼容或旧路由跳转。新版本建库、数据约束、真实数据库测试仍属交付范围。
 
 ## 当前 ticket map
 
-| ID | Issue 正文 | 完成后用户能做什么 | 硬依赖 |
-| --- | --- | --- | --- |
-| T06 | [目标直连的执行首页与正计时闭环](v0.3/T06-execution-foundation.md) | 有目标即可在首页开始、暂停、结束、留下提示，下次直接接着做 | 当前代码基线 |
-| T07 | [三幕目标引导与 AI 写回](v0.3/T07-goal-onboarding.md) | 新用户手动或通过 AI 建立目标，带着目标进入第一次执行 | T06 |
-| T08 | [完整番茄钟与跨端计时](v0.3/T08-pomodoro-timer.md) | 使用专注 / 休息循环，关页、重连或换设备后仍得到准确状态 | T06 |
-| T09 | [足迹、目标投入与记录纠错](v0.3/T09-footprints-history.md) | 看活动日历、做过的事情，按目标回看并补录 / 修正 | T06、T08 |
-| T10 | [完整目标维护、设置与全站收尾](v0.3/T10-management-completion.md) | 完全通过 Web 日常使用，AI 能完成同等操作，全站采用新流程 | T07、T09 |
+| ID | Issue 正文 | GitHub Issue | 完成后用户能做什么 | 硬依赖 |
+| --- | --- | --- | --- | --- |
+| T06 | [目标直连的执行首页与正计时闭环](v0.3/T06-execution-foundation.md) | [#25](https://github.com/liujiaqi222/time-os/issues/25) | 有目标即可在首页开始、暂停、结束、留下提示，下次直接接着做 | 当前代码基线 |
+| T07 | [三幕目标引导与 AI 写回](v0.3/T07-goal-onboarding.md) | [#26](https://github.com/liujiaqi222/time-os/issues/26) | 新用户手动或通过 AI 建立目标，带着目标进入第一次执行 | T06 |
+| T08 | [完整番茄钟与跨端计时](v0.3/T08-pomodoro-timer.md) | [#27](https://github.com/liujiaqi222/time-os/issues/27) | 使用专注 / 休息循环，关页、重连或换设备后仍得到准确状态 | T06 |
+| T09 | [足迹、目标投入与记录纠错](v0.3/T09-footprints-history.md) | [#28](https://github.com/liujiaqi222/time-os/issues/28) | 看活动日历、做过的事情，按目标回看并补录 / 修正 | T06、T08 |
+| T10 | [完整目标维护、设置与全站收尾](v0.3/T10-management-completion.md) | [#29](https://github.com/liujiaqi222/time-os/issues/29) | 完全通过 Web 日常使用，AI 能完成同等操作，全站采用新流程 | T07、T09 |
 
 推荐交付顺序：**T06 → T07 → T08 → T09 → T10**。T07 / T08 的逻辑依赖均为 T06，但共享执行页与设置契约，默认顺序开发，不要求并行。
 
