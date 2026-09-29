@@ -55,7 +55,7 @@ export function ActiveSessionBanner({
     <div
       role="region"
       aria-label="进行中的专注提示条"
-      className="border-b border-amber-200/80 bg-amber-50/90 text-stone-900 transition-colors"
+      className="border-b border-amber-200/80 bg-amber-50/95 text-stone-900 backdrop-blur-md"
     >
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-2.5 sm:flex-nowrap">
         <div className="flex min-w-0 items-center gap-3">

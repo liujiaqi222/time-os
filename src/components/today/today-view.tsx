@@ -14,7 +14,6 @@ import {
   updateResumeHintAction,
 } from "@/app/(app)/session-actions";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { EndCard } from "@/components/today/end-card";
@@ -253,17 +252,12 @@ export function TodayView({
   const { activeSession, selection, goals, todayStats } = dashboard;
 
   return (
-    <div className="space-y-8 pb-8">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-            执行
-          </p>
-          <p className="text-sm text-stone-500">
-            今日已投入 {formatHumanDuration(todayStats.totalFocusSeconds)} ·{" "}
-            {todayStats.sessionCount} 次执行
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-xl space-y-6 pb-4">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <p className="text-sm text-stone-500">
+          今日已投入 {formatHumanDuration(todayStats.totalFocusSeconds)} ·{" "}
+          {todayStats.sessionCount} 次执行
+        </p>
         {activeSession && (
           <p className="text-xs text-stone-400">
             Space 暂停 / 继续 · F 结束 · D 打断
@@ -336,42 +330,40 @@ export function TodayView({
           onError={setActionError}
         />
       ) : (
-        <Card className="border-dashed border-stone-300 bg-transparent shadow-none">
-          <CardContent className="flex min-h-80 flex-col items-start justify-center gap-5 p-8 sm:p-12">
-            <div className="max-w-xl space-y-2">
-              <h2 className="text-2xl font-medium">
-                {goals.length === 0
-                  ? "最近，有什么事是你真的想推进的？"
-                  : "当前没有可执行的目标"}
-              </h2>
-              <p className="leading-7 text-stone-600">
-                输入一个目标标题即可开始。目标只在这里创建，一次专注也只需要一次点击。
-              </p>
-            </div>
-            <form
-              onSubmit={handleCreateFirstGoal}
-              className="flex w-full max-w-xl flex-col gap-2 sm:flex-row"
+        <div className="flex flex-col items-start gap-5 pt-8">
+          <div className="space-y-2">
+            <h2 className="text-2xl font-medium tracking-tight">
+              {goals.length === 0
+                ? "最近，有什么事是你真的想推进的？"
+                : "当前没有可执行的目标"}
+            </h2>
+            <p className="text-sm leading-6 text-stone-500">
+              输入一个目标标题即可开始。目标只在这里创建，一次专注也只需要一次点击。
+            </p>
+          </div>
+          <form
+            onSubmit={handleCreateFirstGoal}
+            className="flex w-full flex-col gap-2 sm:flex-row"
+          >
+            <Input
+              value={newGoalTitle}
+              onChange={(e) => setNewGoalTitle(e.target.value)}
+              placeholder="例如：把产品介绍页改完"
+              maxLength={240}
+              className="h-11 flex-1 bg-white/70 text-base"
+              aria-label="目标标题"
+            />
+            <Button
+              type="submit"
+              size="lg"
+              disabled={busyGoal || !newGoalTitle.trim()}
+              className="h-11 gap-1.5 rounded-full px-4"
             >
-              <Input
-                value={newGoalTitle}
-                onChange={(e) => setNewGoalTitle(e.target.value)}
-                placeholder="例如：把产品介绍页改完"
-                maxLength={240}
-                className="h-11 flex-1 text-base"
-                aria-label="目标标题"
-              />
-              <Button
-                type="submit"
-                size="lg"
-                disabled={busyGoal || !newGoalTitle.trim()}
-                className="h-11 gap-1.5"
-              >
-                <Plus className="size-4" aria-hidden="true" />
-                {busyGoal ? "创建中…" : "创建目标"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+              <Plus className="size-4" aria-hidden="true" />
+              {busyGoal ? "创建中…" : "创建目标"}
+            </Button>
+          </form>
+        </div>
       )}
 
       {cancelOpen && activeSession && (

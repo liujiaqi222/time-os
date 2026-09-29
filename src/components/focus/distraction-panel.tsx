@@ -5,7 +5,6 @@ import { Archive, Edit2 } from "lucide-react";
 
 import type { useDistractions } from "@/components/focus/use-distractions";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 /**
@@ -34,13 +33,13 @@ export function DistractionPanel({
   };
 
   return (
-    <Card className="border-stone-200/80 bg-white/80 shadow-xs">
-      <CardContent className="space-y-4 p-5 sm:p-6">
+    <section className="mt-8 space-y-3 border-t border-stone-200/80 pt-8">
+      <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <span className="font-mono text-xs font-medium tracking-wider text-stone-500 uppercase">
+          <span className="text-sm font-medium text-stone-700">
             打断（按 D 快速记录）
           </span>
-          <span className="font-mono text-xs text-stone-400">
+          <span className="text-xs text-stone-400">
             {distractions.list.length} 条打断
           </span>
         </div>
@@ -136,7 +135,7 @@ export function DistractionPanel({
             ))}
           </ul>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
