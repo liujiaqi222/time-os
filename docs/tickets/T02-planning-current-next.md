@@ -1,5 +1,7 @@
 # T02 — Planning system and Current Next
 
+> 历史票（v0.2）：保留上一轮开发背景；v3 实施以 [当前 PRD](../prd.md) 与 [T06–T10](README.md) 为准，不按本票恢复 Track、旧 Focus 或强制 Review 流程。
+
 ## Outcome
 
 交付完整的 Goal → Track → Task 计划系统。完成后，用户可以在 Web 中维护全部计划，AI 也可以通过 MCP 完成完全等价的领域操作；每个 Track 的 Current Next 在创建、排序、完成、跳过、归档和恢复过程中始终满足 PRD 约束。

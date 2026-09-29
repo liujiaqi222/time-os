@@ -1,5 +1,7 @@
 # T03 — Focus execution loop
 
+> 历史票（v0.2）：保留上一轮开发背景；v3 实施以 [当前 PRD](../prd.md) 与 [T06–T10](README.md) 为准，不按本票恢复 Track、旧 Focus 或强制 Review 流程。
+
 ## Outcome
 
 交付 Time OS 的核心日用闭环：打开 Today，在 5 秒内选择当前 Track 并开始 Focus；计时可跨刷新恢复，支持 Pause/Resume、Note、Distraction、Finish Review 和 Cancel；完成/跳过当前 Task 时原子推进 Next。Web 与 MCP 对所有 Session/Distraction 操作具有等价能力。

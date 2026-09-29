@@ -1,5 +1,7 @@
 # T05 — Capability parity hardening and self-hosted release
 
+> 历史票（v0.2）：保留上一轮开发背景；v3 实施以 [当前 PRD](../prd.md) 与 [T06–T10](README.md) 为准，不按本票恢复 Track、旧 Focus 或强制 Review 流程。
+
 ## Outcome
 
 把已经可日用的产品收敛为可公开自托管的 MVP：补齐 Web/MCP 契约缺口、可访问性与移动端质量、运行安全、部署文档和真实 Vercel+Neon 验证。完成后，README 中的部署承诺必须由一次全新实例实测支撑。

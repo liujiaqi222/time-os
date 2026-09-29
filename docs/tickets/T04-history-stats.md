@@ -1,5 +1,7 @@
 # T04 — History, manual records and statistics
 
+> 历史票（v0.2）：保留上一轮开发背景；v3 实施以 [当前 PRD](../prd.md) 与 [T06–T10](README.md) 为准，不按本票恢复 Track、旧 Focus 或强制 Review 流程。
+
 ## Outcome
 
 把执行数据变成可信的历史与反馈。完成后，用户和 AI 都能查看、筛选、补录和纠正 Session，检查 Distractions，并获得符合 timezone、跨午夜、暂停和实时 Session 规则的统计。

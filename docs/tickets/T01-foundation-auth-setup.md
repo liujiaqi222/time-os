@@ -1,5 +1,7 @@
 # T01 — Foundation, authentication and setup
 
+> 历史票（v0.2）：保留上一轮开发背景；v3 实施以 [当前 PRD](../prd.md) 与 [T06–T10](README.md) 为准，不按本票恢复 Track、旧 Focus 或强制 Review 流程。
+
 ## Outcome
 
 建立可持续开发的应用骨架。完成后，一个全新本地或部署实例可以自动执行 migration、通过单用户密码登录、完成首次 Setup，并通过受保护的 `/mcp` endpoint 做健康检查。后续 tickets 只需添加领域能力，不再重新设计认证、事务或 adapter 边界。

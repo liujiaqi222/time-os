@@ -1,651 +1,360 @@
 # Time OS — MVP PRD
 
-**Version:** 0.2
+**Version:** 0.3
 
-**Date:** 2026-09-22
-**Status:** Ready for implementation
+**Date:** 2026-09-29
 
-**Working name:** Time OS
+**Status:** 产品范围已确认；按本文与 [T06–T10](tickets/README.md) 实施，尚未代表功能已上线。
 
----
+本文是当前产品与行为规范。[产品方向](product-direction-v0.3.md) 保留讨论形成的体验说明；[v0.2 存档](archive/prd-v0.2.md) 和 T01–T05 仅作历史参考。本文中的具体默认值是为实现收敛的工程与交互选择，可在实际体验后调整，不增加 MVP 模块。
 
-## 1. Product definition
+## 1. 定位与唯一核心链路
 
-Time OS 是一个面向个人的、AI-native 的目标执行与时间管理工具。
+Time OS 帮用户围绕目标开始执行、留下进展，并在下次打开时接着做。Web 主要用于执行与回看；AI 可以帮助制定和调整计划，用户也可以完全通过 Web 独立使用。
 
-> **AI is the planner. Time OS is the execution system.**
+```text
+确定目标 → 明确下一步 → 开始执行 → 保存进展 → 下次继续
+                                      ↓
+                              足迹：看见真实投入
+```
 
-用户在 ChatGPT、Claude、Codex 等支持 MCP 的 AI 客户端里讨论目标、拆解计划和调整优先级；Time OS 保存计划状态，明确每条推进线的下一步，并记录真实执行。
+“明确下一步”可来自已有任务、接续提示或一句临时执行意图，不是必填表单。目标必需，任务与文字输入可选。
 
-Time OS 解决两个问题：
+**核心验收：**周一创建目标，执行二十分钟后结束并写“下次先补第二段例子”；周三打开即看到原任务与该提示，一键继续。如果周一仅暂停，周三恢复同一次计时。
 
-1. **我现在应该做什么？**
-2. **我上次做到哪里了？**
+### 1.1 产品原则
 
-MVP 不内置 AI Chat、LLM API、自动拆解或推荐算法。
+- 一个明确的开始入口；正在执行时减少其他选择。
+- 用户主要理解目标、任务、执行记录；复杂组织不成为开始的条件。
+- 开始与结束都不要求填写完整计划或复盘。
+- 时间、保存状态和完成事项如实展示，投入不自动等于目标进展。
+- UI 与 MCP 共用服务端业务规则；服务端服务于这两个入口。
+- 前端、服务、数据模型均可重写。复用旧代码是工程选择，不是产品约束。
 
-### 1.1 MVP 成功标准
+### 1.2 用户与部署范围
 
-第一优先级是作者本人可以每天稳定使用；同时保持任何开发者都能通过 GitHub、Vercel 和 Neon 部署自己的单用户实例。
+首先满足个人每日稳定使用。一个部署对应一个用户，沿用 Vercel + Neon 自托管方式；无 users、团队、租户、订阅或社交。接入 AI 可选，不内置 LLM API 或聊天。
 
-核心价值按以下顺序验证：
+## 2. MVP 功能边界
 
-1. 每个 Track 唯一的 Current Next 能降低启动成本。
-2. Focus Session 能可靠记录执行过程。
-3. AI 能通过 MCP 完成与 Web 相同的领域数据操作。
+| 环节 | 必须可用 |
+| --- | --- |
+| 进入 | 手动 / AI 目标引导，目标保存后衔接首页 |
+| 准备 | 看目标与任务，快速添加、编辑、切换 |
+| 执行 | 正计时、番茄钟、暂停恢复、笔记 |
+| 结束 | 先保存时间，可选完成任务与接续提示 |
+| 返回 | 恢复当前计时，或接上上次工作 |
+| 回看 | 活动日历、投入摘要、目标记录、完成事项、补录纠错 |
+| 调整 | Web 目标 / 任务管理，MCP 等价领域能力 |
 
-Web 首先形成可日用体验，但每个领域能力必须复用同一 Service Layer，并同时提供等价 MCP 能力。
+本轮不做：习惯 / 重复任务系统、今日重点对象、每日必填计划、专用最小行动模块、十二周周期、WOOP 表单、自定义领先指标、计划达成率、目标完成百分比、生产力评分、周期复盘系统、内置 AI 聊天 / 自动教练、复杂计时预设、循环编排、排行榜与奖励体系。用户可在说明中写行动约定，不由此产生排程或评分功能。
 
----
+不新增日历集成、子任务树、看板、甘特图、附件、富文本、原生 App、浏览器扩展、多用户、OAuth 或 hard delete。可选到时提示音属于计时反馈；后台推送与定时提醒服务不属于本轮。
 
-## 2. Product principles
+## 3. 核心模型与状态
 
-### 2.1 Execution first
-
-Time OS 80% 服务执行，20% 服务查看和维护计划。首页首先展示当前可执行内容，而不是完整 backlog。
-
-### 2.2 One clear next
-
-每个 Track 同一时间最多有一个 Current Next。Current Next 是显式执行状态，不等同于排序第一的 Task。
-
-### 2.3 AI plans, app stores
-
-AI 负责讨论与决策；Time OS 负责持久化、状态约束、计时、历史与统计。所有关键业务规则必须在服务端执行。
-
-### 2.4 Low friction
-
-任何功能都必须回答：它是在帮助用户开始执行，还是在制造管理工作？后者不进入 MVP。
-
-### 2.5 Safe defaults, reversible details
-
-产品方向和数据完整性必须在实现前明确。排序重编号、加载态、错误文案等可逆细节采用简单可靠的默认实现，在真实使用后调整。
-
----
-
-## 3. Target user and deployment model
-
-MVP 面向：
-
-- 单用户；
-- 同时推进多个学习或工作方向；
-- 经常使用 10–60 分钟碎片时间；
-- 已使用 ChatGPT、Claude、Codex 等 AI 工具；
-- 希望 AI 可以直接维护自己的执行系统。
-
-部署模型固定为：
-
-> **One deployment = one user**
-
-每个实例拥有独立的 Vercel Project、Neon PostgreSQL、Web 密码、MCP Token 和数据。不设计 users、organizations、workspaces、memberships、roles、subscriptions 或 tenant_id。
-
----
-
-## 4. Domain model
-
-产品采用固定三级结构：
+下述为领域契约，不要求使用同名表；内部字段由 tickets 落地。
 
 ```text
 Goal
-  └── Track
-        └── Task
+ ├─ Task（可选，多项）
+ └─ Session（执行或补录，必属 Goal，可选关联同 Goal 的 Task）
+      └─ 计时阶段 / 实际专注区间（内部记录）
 ```
 
-不支持 Subtask 或任意深度嵌套。Task 太大时，应拆成多个平级 Task。
-
-### 4.1 Goal
-
-```ts
-type GoalStatus = "active" | "completed" | "archived"
-
-interface Goal {
-  id: UUID
-  title: string
-  description: string | null
-  status: GoalStatus
-  position: number
-  createdAt: timestamp
-  updatedAt: timestamp
-}
-```
-
-### 4.2 Track
-
-Track 必须属于一个 Goal。
-
-```ts
-type TrackStatus = "active" | "completed" | "archived"
-
-interface Track {
-  id: UUID
-  goalId: UUID
-  title: string
-  description: string | null
-  status: TrackStatus
-  currentTaskId: UUID | null
-  position: number
-  createdAt: timestamp
-  updatedAt: timestamp
-}
-```
-
-`currentTaskId` 即 Current Next；它必须指向本 Track 内的 pending Task。
-
-### 4.3 Task
-
-```ts
-type TaskStatus = "pending" | "completed" | "skipped" | "archived"
-type ResourceType = "url" | "text"
-
-interface Task {
-  id: UUID
-  trackId: UUID
-  title: string
-  description: string | null
-  status: TaskStatus
-  position: number
-  estimatedMinutes: number | null
-  resourceType: ResourceType | null
-  resourceValue: string | null
-  note: string | null
-  completedAt: timestamp | null
-  createdAt: timestamp
-  updatedAt: timestamp
-}
-```
-
-Resource 只有 URL 和 Text 两类。`resourceType` 与 `resourceValue` 必须同时为空或同时有值；URL 仅接受 `http`/`https`。
-
-### 4.4 Session
-
-Session 代表一次真实执行时间，必须关联 Track，可以不关联 Task。
-
-```ts
-type SessionStatus = "active" | "paused" | "completed" | "cancelled"
-type SessionEntryMode = "timer" | "manual"
-type SessionCreatedVia = "web" | "mcp"
-
-interface Session {
-  id: UUID
-  trackId: UUID
-  taskId: UUID | null
-  status: SessionStatus
-  entryMode: SessionEntryMode
-  createdVia: SessionCreatedVia
-  plannedMinutes: number | null
-  startedAt: timestamp
-  pausedAt: timestamp | null
-  totalPausedSeconds: number
-  endedAt: timestamp | null
-  durationSeconds: number | null
-  note: string | null
-  createdAt: timestamp
-  updatedAt: timestamp
-}
-```
-
-`entryMode` 表示 timer 或事后补录；`createdVia` 表示由 Web 还是 MCP 创建。两者不得混用为一个 source 字段。
-
-### 4.5 Distraction
-
-```ts
-interface Distraction {
-  id: UUID
-  sessionId: UUID
-  text: string | null
-  archivedAt: timestamp | null
-  createdAt: timestamp
-  updatedAt: timestamp
-}
-```
+### 3.1 Goal
 
-允许空文本，表示快速记录一次打断。支持编辑和 archive，不支持 hard delete。
+保存 id、title、可选 description（含个人理由）、status、position 与时间戳。状态为 active / completed / archived。创建只必填标题；无必须填写的期限、指标或分组。
 
-### 4.6 App settings
+非 active 目标不接受新计时或计划编辑；用户可显式重新启用。目标状态变化不级联改写任务状态，不删除历史。所属目标存在未结束计时时，完成 / 归档须先结束或取消计时；休息、暂停、到时等待也属于未结束。
 
-```ts
-interface AppSettings {
-  id: "default"
-  timezone: string
-  defaultFocusMinutes: number
-  weekStartsOn: 0 | 1
-  selectedTrackId: UUID | null
-  setupCompletedAt: timestamp | null
-  createdAt: timestamp
-  updatedAt: timestamp
-}
-```
+### 3.2 Task
 
-Timezone 必须使用 IANA timezone。数据库时间统一存 UTC，展示和统计基于当前设置的 timezone 计算。
+保存 id、goalId、title、可选 description / note / estimatedMinutes / resource、status、目标内 position、completedAt 与时间戳。状态为 pending / completed / skipped / archived。
 
-### 4.7 Idempotency records
+Task 直接属于 Goal。新建默认追加；批量创建一次最多 50 项，保持输入顺序。资源沿用 text 或 http(s) URL；只有标题是快速添加的必填项。estimatedMinutes 不覆盖用户选择的计时偏好。
 
-`tasks_create`、`session_start`、`session_log` 支持可选 `idempotencyKey`。相同操作范围和 key 的重试必须返回第一次的结果，不能重复写入。实现可以使用独立表保存 key、操作类型、请求摘要和结果引用。
+只有 pending 任务可选作新执行对象。非 pending 任务先显式重新打开，再编辑或执行；reopen 清除 completedAt，但不抢占当前选择。完成 / 跳过 / 归档不意味着结束计时：关联未结束计时的任务须先结束该计时，再变更状态，防止在休息中被 AI 完成后又开始下一轮。
 
----
+不自动完成目标。排序采用目标内连续位置；重排不改变一个仍有效的显式任务选择。任务跨目标移动不纳入 MVP，历史纠错可重新指定合法归属。
 
-## 5. Domain invariants
+### 3.3 Session
 
-数据库约束与 Service Layer 必须共同保证：
+Session 表示一次从开始到结束的执行过程，番茄钟的多段专注与休息属于同一过程。保存：
 
-1. Track 必须属于 Goal。
-2. Task 必须属于 Track。
-3. Session 必须属于 Track。
-4. Session 有 Task 时，Task 必须属于同一 Track。
-5. Current Next 必须属于同一 Track，且状态为 pending。
-6. 整个实例同时最多存在一个 active 或 paused Session。
-7. completed、skipped、archived Task 不能成为 Current Next。
-8. 非 active Goal 或 Track 下不能开始新 Session。
-9. 有 active/paused Session 时，不能将其 Goal 或 Track 改为 completed/archived。
-10. `estimatedMinutes`、`plannedMinutes` 和手动时长有值时必须大于 0。
-11. `durationSeconds` 和 `totalPausedSeconds` 不能为负。
-12. 每个 Track 内 Task position 是从 1 开始的连续整数。
-13. 所有跨实体状态变更必须通过事务完成。
+- id、goalId、可选 taskId；有 Task 时必须属于同 Goal。
+- status：active / paused / completed / cancelled；具体专注 / 休息 / 到时等待用内部阶段表达。
+- entryMode：timer / manual；createdVia：web / mcp；二者不能混成一个 source。
+- timerMode：stopwatch / pomodoro；无旧倒计时兼容模式。
+- 可选 intent（这次想做什么）、note（过程笔记）、resumeHint（下次从哪里继续）。三者语义独立，都不自动创建 Task。
+- startedAt、endedAt、有效专注时长、阶段配置快照与修改版本；所有时刻存 UTC。
+- 统计依据 timeBasis：observed（实际区间）、manual（用户补录）、corrected（用户更正后的汇总）。
 
-MVP 不提供任何 hard delete。Goal、Track、Task 和 Distraction 使用 archive；Session 使用 cancel。
+一个 Session 可含多段专注，但执行次数按 Session 去重；休息不另算执行。小于一秒的误启动可结束并保留零时长记录，零有效时长不点亮日历、不计有效执行次数。取消保留原记录，默认查询与统计排除。
 
----
+### 3.4 内部计时数据
 
-## 6. Task and Current Next rules
+新记录必须保存实际专注区间及阶段边界，不能只有一个累计暂停秒数。阶段至少能区分专注、短休息、长休息，保存序号、配置时长、开始 / 暂停 / 截止信息。专注暂停或到时关闭当前有效区间，继续时新开区间。
 
-### 6.1 Creation and ordering
+区间按半开区间 `[start, end)` 计算。Session duration 是有效专注区间之和，不包含休息、暂停或到时后等待。阶段信息与记录时长由同一个服务端逻辑计算，UI 不逐秒写数据库。
 
-- 新 Task 默认追加到 Track 末尾。
-- 批量创建保持输入数组顺序，每次最多 50 个。
-- 如果 Track 没有 Current Next，创建后的第一个 pending Task 自动成为 Current Next。
-- 如果已有 Current Next，创建 Task 不覆盖它。
-- Web 与 MCP 都提供一次提交完整 Task ID 顺序的 reorder 能力；服务端在事务内重编号。
-- 重排不改变 Current Next。
+### 3.5 选择与设置
 
-### 6.2 Manual selection
+服务端保存 timezone（IANA）、weekStartsOn、计时偏好、setup 状态，以及唯一的执行选择 `{ goalId, taskId }`。该选择是 UI 与 AI 共用的上下文，不是用户需管理的新对象。
 
-用户或 AI 可以显式设置任意合法 pending Task 为 Current Next，也可以设置为 null。设置时必须验证 Task 属于 Track。
+`taskId = null` 表示用户明确选择仅围绕目标执行；选择接口省略 taskId 表示按 §5 规则自动选下一步。这两种请求不可混同。清空整个选择使用独立的 clear 语义。
 
-### 6.3 Complete, skip and archive
+### 3.6 Track 的边界
 
-当 complete、skip 或 archive 的 Task正好是 Current Next 时，服务端在同一事务中修改状态、按当前 position 查找后续第一个 pending Task并更新 Current Next。没有后续 Task 时设为 null。
+v3 运行模型只保留 Goal、Task、Session 及必需内部记录。Task 与 Session 直接关联 Goal，移除 Track 依赖和接口，禁止自动生成隐藏默认 Track。未来是否增加可选组织能力不在本轮范围内；不承担旧数据转换或接口兼容。
 
-对非 Current Next Task 执行这些操作时，不改变 Current Next。完成最后一个 Task 不自动完成 Track。
+既有 Distraction 可继续作为次级记录能力保留，支持创建、编辑、归档与查看，不扩展为收件箱或新的任务系统。
 
-### 6.4 Reopen
+## 4. 首次使用：开启目标
 
-completed、skipped 或 archived Task 可以恢复为 pending：清除 `completedAt`，但不自动设为 Current Next。
+技术 Setup 与目标引导分开。Setup 检查数据库 / schema，建议浏览器时区并允许确认，保存基础设置；不执行 schema 迁移。检查失败说明修复方式，不进入伪成功状态。
 
-### 6.5 Parent states
+### 4.1 三幕体验
 
-- Goal/Track 的 completed 和 archived 都不会级联改写子项状态。
-- 非 active 父级从默认界面隐藏，并阻止其下开始新 Session。
-- Goal/Track 可以重新激活；恢复时保留子项状态和原 Current Next。
+1. **你想让什么发生？** 中央邀请“最近，有什么事是你真的想推进的？”提供可编辑示例，输入即时形成卡片；同屏提供“和 AI 一起想清楚”。
+2. **让这个目标属于你。** 展示卡片，可选补充“如果做成，你最期待的变化是什么？”统一默认外观，无装饰配置表单。只填标题即可保存，失败保留输入。
+3. **从现在的一小段开始。** 卡片收拢到执行首页计时器上方。已有任务展示第一步；否则可写本次 intent 或直接开始。保存目标不启动计时，必须主动点击。
 
----
+目标标题是唯一必填内容。过程支持返回编辑、跳过可选项、减少动态效果、键盘和移动端；过渡不延迟操作。日后新增目标使用简短版本。
 
-## 7. Session state machine
+草稿仅需支持同一浏览器中断后恢复，存储按实例隔离并在退出登录时清除。已保存目标和选择以服务端为准；重复提交不重复创建。既有可执行目标不重播引导；全部目标非 active 时可建立或重新启用，仍允许看足迹。
 
-### 7.1 Timer source of truth
+### 4.2 AI 路径
 
-计时真实状态来自服务端时间字段：
+逐步展示 Codex / Claude 中实际支持的连接方式、当前实例 endpoint 与 token 占位配置。真实 token 从部署环境取得并填入客户端，不由 Web 读取、回显或存储。实现时核实对应客户端格式，不假设有一键安装插件。
 
-```text
-elapsed = now - startedAt - accumulated paused time
-```
+说明 AI 可读写本实例计划与记录；提供可复制的开场话术，先讨论目标和第一步，经用户确认后写入。讨论留在客户端。
 
-客户端仅实时显示。刷新、关闭浏览器或换设备都不会停止 Session。
+“检查已保存目标”只验证服务端是否存在目标。没有目标时继续引导；有多个候选时让用户选择，确认已有目标不得再次创建。连接是否成功以客户端实际工具调用结果为准，按钮点击不是连接成功证据。失败可切换手动路径，保留已有草稿。
 
-### 7.2 Start
+### 4.3 第一次执行反馈
 
-可以从 Track 的 Current Next 启动，也可以启动不关联 Task 的 Track-only Focus。
+成功保存第一次有效执行后，显示真实投入并点亮对应活动格子；活动读取失败不否认已经保存的记录。零时长不伪造一分钟。仪式表达真实发生的事情，不强制观看庆祝或填写总结。
 
-启动必须验证 Goal/Track active、可选 Task 属于 Track 且 pending、没有其他 active/paused Session，以及 plannedMinutes 合法。
+## 5. 执行首页与下一步选择
 
-`plannedMinutes` 可选。有值时 UI 显示剩余时间，到零后进入 overtime；不弹窗、不暂停、不自动完成。
+### 5.1 页面结构
 
-### 7.3 Pause and resume
+主导航只有“执行”“足迹”，设置从齿轮进入。计时器位于执行首页中心：上方是目标、任务 / intent、接续提示和模式；中央为时间与阶段；下方为主操作。少量其他任务在底部紧凑展示，按需展开全部；执行时收起。
 
-- active → paused 合法；重复 pause 返回当前 paused Session。
-- paused → active 合法；重复 resume 返回当前 active Session。
-- paused 时间不计入 duration。
-- cancelled/completed Session 不能 pause 或 resume。
+已有目标与默认配置时，一次点击开始，无额外确认表单。任务与目标可快速切换，添加任务只问标题。详情编辑、排序与归档按需进入，不能平铺成后台工具箱。
 
-### 7.4 Finish
+其他页面展示紧凑的未结束计时提示和返回入口，不强制跳转，也不复制第二套计时器。
 
-active 或 paused Session 可以 finish。服务端计算实际有效时长；如果从 paused finish，当前暂停区间也必须排除。重复 finish 返回已完成结果，不重复变化。Finish 本身不自动修改 Task。
+### 5.2 确定性选择规则
 
-### 7.5 Finish review
+1. 存在未结束计时：以该 Session 为当前执行对象，恢复阶段与状态。
+2. 无计时且持久化选择仍合法：保持它，包括明确的目标级执行（taskId = null）。
+3. 已选任务变得不可执行：选择同目标中位置在其后的第一个 pending Task；没有后续则选全目标第一个 pending Task；仍无候选则 goal-only。被完成的任务不会再次被选中。
+4. 无有效选择：优先最近一次非取消、有效执行所对应的 active Goal；其原任务仍 pending 则继续，否则取该目标第一个 pending Task；再否则 goal-only。
+5. 没有最近可用目标：按 Goal position 取第一个 active Goal，选其首个 pending Task 或 goal-only；没有 active Goal 则显示目标引导。
 
-Web Review 提供：
+新选目标但省略 taskId 时，优先该目标上次有效执行的 pending Task，再取首个 pending Task；传 null 时保持 goal-only。用户可明确选择任意 pending Task，重排或新建任务不覆盖该选择。
 
-- Continue later：仅 finish Session；
-- Completed：事务内 finish Session、complete Task、advance Next；
-- Skip：事务内 finish Session、skip Task、advance Next。
+完成 / 跳过 / 归档当前已选任务时，在同一事务中更新任务与选择；操作其他任务不改变选择。若用户已经选了另一任务，旧结束卡上的“完成任务”不得将选择抢回。查询回退规则与显式修改规则共用一个解析器。
 
-任一步失败则整笔事务回滚。无 Task 的 Session 只显示 Finish。
+### 5.3 接续提示与切换
 
-### 7.6 Cancel
+有 Task 时只查该 Task 最近一条有效 completed Session 的 resumeHint；goal-only 时只查同 Goal 的 goal-only 记录。最近记录没有提示则不复活更早的旧提示。手动补录 / 改历史时间不自动抢占日常选择。
 
-误启动或遗留 Session 可以 cancel。它保留记录、note 和 endedAt，但不进入默认 History，不计入专注时长或 Session count，也不能恢复、resume 或 finish。
+提示属于原记录，不复制进下一任务；completed Task 的提示保留在历史。编辑后按所属上下文更新展示。
 
-### 7.7 Manual log and correction
+运行中可浏览其他目标，但切换执行对象须明确结束并保存当前过程，再开始新过程；第二步失败保留前一条已保存记录并提供重试，不自动取消。只切换浏览页面不改变 Session 归属。
 
-Web 与 MCP 都支持事后补录：Track、可选 Task、有效时长、结束时间和 note。默认 `endedAt = now`，`startedAt = endedAt - duration`。
+## 6. 计时行为
 
-completed/manual Session 可以更正 Track、Task、开始/结束时间、有效时长与 note，但不能改回 active/paused。修改后必须重新验证实体关系和正时长。
+### 6.1 通用规则
 
-### 7.8 Overlap policy
+- 全实例最多一个未结束计时过程，专注、休息、暂停、到时等待均占用该位置。
+- 开始验证 active Goal、可选 pending Task 与归属。并发 start 由事务 / 数据库保证只能有一个成功。
+- 服务端时间为准，响应包含 serverNow、当前阶段、阶段截止时间、版本和可用操作。客户端仅渲染并在重连 / 回到前台时校准。
+- 刷新、关页、换设备不重置时间。浏览器后台节流或提醒失败不影响计时结算。
+- 计时命令可安全重试；重复 pause / resume / finish 返回已有结果，不重复区间或推进。阶段转换携带期望阶段标识，过期操作不能作用于下一轮。
+- 开始后模式、目标、任务在本 Session 内固定；偏好修改作用于下一次 Session。MVP 不提供运行中改本轮时长。
 
-历史非 cancelled Session 时间重叠时允许保存，但必须显式确认：
+### 6.2 正计时
 
-- Web 先显示冲突 Session，再由用户确认；
-- MCP 首次返回 `SESSION_TIME_OVERLAP`，只有传入 `allowOverlap: true` 才写入。
+从零计时；暂停关闭当前专注区间，继续新开区间；结束汇总有效区间。无预定到时，也不提供分段圈速功能。
 
-统计按各 Session 有效时长相加，不自动去重。
+### 6.3 番茄钟默认值
 
-### 7.9 Focus note
+默认专注 25 分钟、短休息 5 分钟；长休息默认启用，每完成 4 段完整专注提供 15 分钟长休息。用户可关闭长休息或修改三种时长；固定四轮间隔，不另建循环配置产品。新实例默认番茄钟，之后记住上次显式选择。
 
-Focus 页 Quick Note 通过短 debounce 自动保存到当前 Session。Finish Review 编辑同一字段，刷新或关闭页面不得丢失已保存内容。
+每种时长允许 1–180 分钟整数；不限制正计时总长度。配置在 Session 创建时保存快照，不被另一设备修改偏好影响。
 
----
+### 6.4 阶段转换
 
-## 8. Today and Focus experience
+| 当前阶段 | 动作 / 时间事件 | 结果 |
+| --- | --- | --- |
+| 专注运行 | 暂停 / 继续 | 只影响当前段剩余时长，暂停不计入 |
+| 专注到时 | 时间达到截止点 | 该段截止于截止点，进入等待；不继续累计，不自动休息 |
+| 专注到时等待 | 开始休息 | 从点击被服务端接受的时刻开始短 / 长休息 |
+| 专注到时等待 | 继续专注 | 跳过本次休息，从当前时刻开始一个新的完整专注段；等待间隔不计入 |
+| 休息运行 / 暂停 | 开始下一轮 | 明确提前结束休息，开始新专注段 |
+| 休息到时 | 时间达到截止点 | 进入等待，不自动开始专注 |
+| 休息到时等待 | 开始下一轮 | 从当前时刻开始新专注段 |
+| 任意未结束阶段 | 结束 | 保存已经发生的有效专注，结束整个 Session |
 
-### 8.1 Today
+专注段到时只计一次完整轮次；提前结束不会凑整为一个番茄。跳过休息不会补欠休息；下一次长休息按完整专注段总数计算。结束过程后轮次重置，下一次 Session 从第一轮开始。
 
-首页目标是 5 秒内开始执行，包括今日专注数据、一个主要 Current Focus 卡片和其他 active Tracks 的紧凑卡片。全页最多一个强视觉 Primary CTA。
+到时后返回网页、首次服务端读取或收到命令时必须按原截止点判断有效状态，不按“发现到时”的时间结算。有效状态计算共用；只读 MCP 不需通过隐式写入才能给出正确时间。命令提交时原子落账所有已到期事实。
 
-Current Focus 选择规则：
+到时等待不等于用户暂停，不显示无意义的恢复倒计时；界面显示下一阶段动作。提醒是辅助，在可用的浏览器环境提供到时可见反馈与可关闭的提示音，不承诺关页后系统通知。
 
-1. `selectedTrackId` 对应 Track 仍可执行时使用它；即使没有 Current Next，也保持选择。
-2. 否则选择最近存在有效 Session 行为的可执行 Track。
-3. 再否则按 `Goal.position → Track.position` 选择第一个。
-4. 没有可执行 Track 时显示创建引导。
+### 6.5 结束、取消和笔记
 
-用户可以手选 Track 并持久保存。Track 有 Current Next 时 Start 默认关联该 Task；没有 Next 时提供 `Start unstructured focus` 和 `Add task`。
+点击结束先保存真实时长与最新笔记，成功即反馈；失败保留当前信息与重试入口。不要先打开 Review 表单。
 
-### 8.2 Focus page
+结束后可选完成任务、填写 resumeHint。两者独立保存，失败不回滚已结束的 Session；默认不改变任务。成功完成与选择推进仍为原子操作。无需点击“下次继续”才能离开。
 
-Focus 页只显示 Track、可选 Task、计时、Pause/Resume、Add Distraction、Quick Note、Finish，以及低权重的 Cancel。它不显示普通 Sidebar、Goals、Statistics 或 Backlog。
+note 与 resumeHint 使用版本校验 / 有序写入，阻止旧自动保存请求覆盖结束时的新文本。响应丢失后重试返回同一结果；不同客户端的冲突保留本地文本并提示刷新，不静默覆盖。
 
-其他页面如果存在 active/paused Session，在顶部显示紧凑提示与 `Return to focus`，不强制重定向。
+取消用于误启动或作废记录，保留数据并排除默认统计。取消整个番茄 Session 会排除其全部专注段，必须说明影响；保留已有投入应使用“结束”。取消后不能恢复计时。任务完成状态不会因取消 Session 自动撤销。
 
-### 8.3 Keyboard interaction
+## 7. 足迹、历史与纠错
 
-- Space：Pause/Resume；
-- D：记录 Distraction；
-- F：Finish；
-- Esc：关闭 Dialog/Sheet。
+### 7.1 页面
 
-输入框获得焦点时不得触发快捷键。
+首屏为累计 / 本周投入与执行次数等少量摘要、最近一年的活动日历。下方显示最近记录、完成事项与按目标查看的入口。筛选、补录和审计通过次级入口展开，不抢占首屏。
 
----
+活动格深浅对应时长；点击 / 键盘聚焦可见日期、时长、次数并查看当天记录。空白日与未来日期区分，无“失败日”惩罚文案。移动端采用可理解的月份切换或明确可滚动区域，不以不可点击的小格堆满屏幕。
 
-## 9. Planning, History and Statistics
+一条 Session 在主历史列表只显示一次，按开始日归组；日历点击某天则能看到与该日有实际投入交集的跨日 Session。番茄多轮在详情展开，不把轮次当成多条用户执行。
 
-### 9.1 Goals and Track detail
+### 7.2 统计口径
 
-Goals 页面支持 Goal/Track 创建、编辑、完成、归档、恢复和排序。Track Detail 支持完整 Task 维护、排序、Next 设置、资源与 Note，以及从 Track/Task 启动 Focus。
+- 已完成、运行中、暂停、补录均可贡献已经发生的有效投入；取消排除。
+- 暂停、休息、到时等待排除；统计观测时刻统一，正在运行的区间裁剪到 now 或截止点。
+- observed 按专注区间与本地日期交集分配；timezone 使用当前设置，weekStartsOn 决定周界线，覆盖 DST。
+- manual / corrected 按记录声明的时间范围分摊有效时长，不伪称恢复了真实暂停位置；整数秒分配需保证跨日之和等于总量。
+- 日执行次数按当天有效投入大于零的 Session 去重；跨日一条在两天均可出现，但周期次数仍按整个周期内 Session 去重，不直接相加每日次数。
+- completedAt 落入范围且当前为 completed 的 Task 计一次完成事项；reopen 清除完成时间，重复完成不重复计数。不是不可变的任务事件审计账本。
+- 已归档 / 完成目标的投入仍可查询。取消 Session 不自动撤销独立完成的 Task。
+- 允许显式确认的重叠补录，各 Session 有效时间相加，不隐式去重。
 
-### 9.2 History
+首页、足迹与 MCP 共用统计计算。无连续天数必需指标、自动目标百分比、效率或质量评分。
 
-History 按 Session `startedAt` 对应的本地日期归组，支持日期/Track 筛选和 Add Session。点击记录后用行内展开或 Sheet 显示 Track、Task、时间、有效/计划/暂停时长、Note、Distractions、entryMode、createdVia，以及 Edit/Cancel。
+### 7.3 补录与更正
 
-跨午夜 Session 在 History 中归入开始日，始终只显示一条；统计按真实时间区间拆分。
+补录只要求 Goal、正有效时长，结束时间默认 now，Task 与文字可选；默认 start = end − duration。历史补录 / 更正允许关联既有非 active Goal 或非 pending Task，但必须满足归属关系，不能改变实体状态或创建新计时。
 
-### 9.3 Statistics
+已 completed 记录可修正归属、开始 / 结束、有效时长、intent、note、resumeHint。修改归属时清除不匹配 Task 或要求明确重选；有效时长不超过墙钟范围。运行 / 暂停记录先结束再纠错。
 
-MVP 提供 Today Focus、Weekly Focus、Track Distribution、Completed Tasks、Focus Days 和 Session Count。
+只改文字不改变统计依据。更改时间 / 时长时，保留原始区间为来源，新统计采用明确的 corrected 汇总覆盖，不将旧区间与修正值同时相加，也不伪造新的观察区间；界面说明按更正时间范围分摊。无需逐段编辑器。
 
-- completed、active、paused 和 manual Session 计入；cancelled 不计入；
-- active/paused 按查询时刻实时计算，paused 区间不计入；
-- 跨本地午夜按查询区间交集拆分；
-- weekStartsOn 决定周边界；
-- 使用当前 AppSettings timezone；
-- 重叠 Session 各自累加，不自动去重。
+与其他非取消记录时间范围重叠时，首次写入不生效，返回冲突记录；用户确认后才允许保存，MCP 必须显式 `allowOverlap: true`。更正排除自身，重试不重复新增。取消后的记录可在审计筛选中读取。
 
-不提供 Productivity、Efficiency、AI 或 Focus Quality 分数。
+## 8. 计划、设置与完整 Web 范围
 
----
+### 8.1 目标与任务维护
 
-## 10. Web and MCP capability parity
+完整管理从设置进入；目标列表先显示目标与任务概要，新增 / 编辑按需打开。支持目标新建、编辑、完成、归档、重新启用、排序；任务添加 / 批量输入、编辑、完成、跳过、归档、重新打开、排序、资源与笔记。
 
-所有 Web 可执行的领域数据读取与写入，MCP 都必须能完成，包括：
+完成 / 归档状态默认只读，显式恢复后才编辑；未结束计时阻止对应状态变更时，给出返回当前执行的入口。确认与错误用站内 UI，不调用浏览器原生 confirm。普通完成动作不用破坏性红色。
 
-- Goal/Track/Task 状态操作和排序；
-- Current Next set/clear；
-- Session start/pause/resume/finish/cancel/log/update/detail/list；
-- Distraction create/list/update/archive；
-- Settings read/update；
-- Dashboard、History 和 Statistics 查询。
+排序有非拖拽替代，失败回滚；列表分页 / 安全上限，不要求首页加载所有历史。不展示 Track 管理。
 
-页面导航、拖拽手势、Web 登录和 Secret 管理不属于领域能力对等；MCP 提供语义等价工具。所有 adapter 调用同一 Service Layer。
+### 8.2 设置
 
-### 10.1 MCP tools
+时间偏好、番茄默认值、AI 连接帮助、完整目标管理入口与退出登录。时区改变重新计算展示 / 统计，不修改原始 UTC；计时偏好不改写运行过程。
 
-Read：
+### 8.3 路由与表现
 
-```text
-dashboard_get
-goals_list
-tracks_list
-tasks_list
-next_get
-session_get_active
-session_get
-sessions_list
-distractions_list
-stats_get
-settings_get
-```
+使用 `/today` 作为“执行”、`/history` 作为“足迹”，`/onboarding` 作为引导、`/goals/[id]` 作为目标详情；`/goals` 作为次级管理列表。登录、Setup、设置、加载、空白、错误与 404 均采用同一视觉语言。
 
-Write：
+删除独立 `/focus/[id]` 和 `/tracks/[id]` 旧页面及调用入口。计时只有首页的一套组件与状态机，历史详情从足迹进入，不建设旧路由兼容跳转。
 
-```text
-goal_create / goal_update / goals_reorder
-track_create / track_update / tracks_reorder
-tasks_create / task_update / tasks_reorder
-task_complete / task_skip / task_archive / task_reopen
-next_set
-session_start / session_pause / session_resume
-session_finish / session_cancel / session_log / session_update
-distraction_log / distraction_update / distraction_archive
-settings_update
-```
+轻量、留白、内容优先。桌面与 375px 移动端均完整可用；运行 / 暂停 / 等待 / 保存中状态区分。对话框管理焦点，长内容可滚动；所有字段有标签，动效尊重 reduced motion。计时不每秒通过 live region 朗读。
 
-所有工具必须有严格 input schema、结构化 output、明确 description 和一致的 domain error。列表工具必须分页或设置安全上限。
+Space 暂停 / 继续，F 结束，D 打断记录仅在相应可用状态触发；输入、select、contenteditable 或对话框中不抢键。没有 pause / resume 意义的等待阶段不执行 Space。主操作不被底栏或软键盘遮挡。
 
-`dashboard_get` 一次返回 active Session、今日统计、selected/current focus Track，以及所有 active Tracks 的 Current Next 与今日投入。
+## 9. 服务端、MCP 与错误契约
 
----
+### 9.1 共同边界
 
-## 11. Authentication and security
+Web adapter 与 MCP 调用同一领域服务。领域服务统一处理状态、归属、选择、计时、统计、事务和错误，不能让 UI / MCP 各自推算一个版本。
 
-Required environment variables：
+现有 Next.js + TypeScript、PostgreSQL / Neon、Drizzle migration、Zod、MCP SDK、Tailwind / UI primitives 可继续使用。本轮不要求换技术栈，但模块、表与接口可重写。编写 Next.js 代码前按 AGENTS.md 读取本地 `node_modules/next/dist/docs/` 的相关指南。
 
-```env
-DATABASE_URL=
-TIMEOS_WEB_PASSWORD=
-TIMEOS_MCP_TOKEN=
-TIMEOS_SESSION_SECRET=
-```
+### 9.2 v3 领域接口族
 
-Optional：`NEXT_PUBLIC_APP_NAME=Time OS`。
+| 能力 | MCP 名称 / 语义 | Web 使用位置 |
+| --- | --- | --- |
+| 执行上下文 | `dashboard_get`、`selection_set` / `selection_clear` | 首页、目标切换 |
+| 目标 | `goals_list`、`goal_get/create/update`、`goals_reorder` | 引导、管理、详情 |
+| 任务 | `tasks_list/create/reorder`、`task_update/complete/skip/archive/reopen` | 首页、管理 |
+| 计时 | `session_get_active/get/start/pause/resume/advance/finish/cancel` | 中央计时器 |
+| 文字 | `session_note_update`、`session_resume_hint_update` | 执行中、结束卡、详情 |
+| 历史 | `sessions_list`、`session_log/update` | 足迹、补录纠错 |
+| 统计 | `stats_get`（含 daily 与 byGoal 视图） | 首页、足迹 |
+| 打断 | `distractions_list`、`distraction_log/update/archive` | 次级记录入口 |
+| 偏好 | `settings_get/update` | 设置、计时配置 |
 
-### 11.1 Web
+工具名中斜杠代表同前缀的多个工具，不是一个带斜杠的名称。`session_finish` v3 只结束，不带 Task outcome；完成 Task 是另一项明确操作。`session_advance` 用显式 action 和 expectedPhaseId 表示开始休息 / 下一轮，不能使用模糊“toggle”。
 
-- 单用户密码登录，不建立 User 表；
-- 密码仅在服务端校验，不存入客户端存储；
-- 签发由 Session Secret 保护的 `HttpOnly`、`Secure`、`SameSite=Lax` Cookie；
-- Cookie 采用 90 天滑动有效期，活跃使用时续期；
-- 提供 Logout；轮换 Secret 会使已有 Cookie 失效；
-- 登录接口提供适合 Serverless 的基础速率限制或退避；
-- 写请求采用能抵御 CSRF 的同源策略。
+`session_start` 显式提交 goalId 与 timerMode；taskId 省略或 null 均表示本次仅围绕目标，关联任务时必须提交明确 id，服务端不能在启动瞬间偷偷换成另一个候选任务。它与 `selection_set` 中“省略 taskId 自动选择”的语义不同；首页先解析选择，再提交确定的执行对象。
 
-### 11.2 MCP
+`dashboard_get` 返回 serverNow、未结束 Session、有效选择、对应接续提示、有限待办和今日摘要。分页接口使用稳定 cursor 和明确上限；工具声明读写性质、严格输入、结构化结果与能力版本。不得让 MCP 每次必须列出 Track 才能开始。
 
-`POST /mcp` 使用 `Authorization: Bearer <TIMEOS_MCP_TOKEN>`。Web Password 和 MCP Token 不可互换。
+### 9.3 并发与错误
 
-认证层只向业务层提供 `AuthenticatedContext`，便于未来替换 OAuth 2.1。Settings 只展示 endpoint 和 `YOUR_MCP_TOKEN` 占位配置，不读取或回显 Secret。
+Goal / tasks 创建、Session start / log 支持 idempotencyKey；同 key 同输入重试返回同结果，异输入返回 `IDEMPOTENCY_KEY_REUSED`。阶段转换与结束具备幂等语义与并发锁，note / hint 有独立内容版本或等效机制。
 
----
+统一错误至少覆盖：`UNAUTHORIZED`、`GOAL_NOT_FOUND`、`GOAL_NOT_ACTIVE`、`TASK_NOT_IN_GOAL`、`TASK_NOT_PENDING`、`ACTIVE_SESSION_EXISTS`、`PARENT_HAS_ACTIVE_SESSION`、`SESSION_NOT_FOUND`、`INVALID_SESSION_STATE`、`STALE_SESSION_PHASE`、`VERSION_CONFLICT`、`SESSION_TIME_OVERLAP`、`INVALID_POSITION_ORDER`、`IDEMPOTENCY_KEY_REUSED`。精确命名可沿用等价现有 code，但须集中登记并同步契约测试。
 
-## 12. Architecture and technology
+Web 展示可理解的恢复动作，MCP 返回 code / message / 必需 context。不要把正常状态冲突升级为整页崩溃，也不要静默吞掉写失败。
 
-Required stack：
+### 9.4 身份与自托管
 
-```text
-Next.js + TypeScript
-PostgreSQL on Neon
-Drizzle ORM + committed Drizzle migrations
-Tailwind CSS + shadcn/ui
-MCP TypeScript SDK v2 (@modelcontextprotocol/server)
-Zod
-```
+沿用 `DATABASE_URL`、`TIMEOS_WEB_PASSWORD`、`TIMEOS_MCP_TOKEN`、`TIMEOS_SESSION_SECRET`。Web 为单用户密码登录，Cookie 使用 HttpOnly、生产 Secure、SameSite=Lax 和 90 天滑动有效期；登出失效，Secret 轮换使旧会话失效。保留登录退避与写请求同源保护。
 
-MCP 使用 Streamable HTTP，生产 endpoint 为 `POST /mcp`，并保持 stateless。所有真实状态在 PostgreSQL。
+MCP 使用 `/mcp` Streamable HTTP 与独立 Bearer token，stateless adapter，持久状态在数据库。Web Password 与 token 不互换。真实密钥不进入页面、客户端存储或日志；页面只显示 endpoint 与占位符。
 
-```text
-Web UI / Server Actions / Route Handlers / MCP Tools
-                       ↓
-                 Service Layer
-                       ↓
-              Drizzle / PostgreSQL
-```
+部署运行提交的建库 / schema migration，Setup 不自行建表。验证新版本空库初始化，不要求旧库升级；本轮不扩张为新的部署平台功能。对外发布前以实际环境复验文档描述，未进行线上验证则明确标注。
 
-关键索引至少覆盖 Goal/Track/Task 排序、Task 状态、Session Track/Task/状态/时间、Distraction session/archive 和 idempotency key。
+## 10. 数据约束
 
-“全局最多一个 active/paused Session”不能只靠前端检查，必须使用数据库可保证的约束或事务锁策略。
+- Goal / Task / Session 关系由数据库约束及服务端共同保护。
+- 所有选择推进、状态修改、阶段切换和幂等落账在事务内完成；统一锁顺序，避免 start 与 archive 竞态。
+- 新版本内的备注 / 资源 / 打断、任务完成信息和执行来源可追溯。
+- 产品内无 hard delete；目标 / 任务使用归档，执行使用取消。
+- 数据权限依旧为单实例单用户，不因重构放松鉴权。
 
----
+## 11. 直接重构与渐进交付
 
-## 13. Setup and self-hosting
+用户已明确本轮无需考虑迁移，直接按 v3 重构。无旧数据回填、Track 映射、双写、兼容 adapter、旧工具保留或旧路由跳转任务。
 
-README 第一屏提供 Deploy with Vercel，并优先解释产品价值。目标流程：
+1. T06 建立直接关联目标的新模型、新契约与可运行的正计时首页。
+2. 后续 tickets 在该新路径上补齐引导、番茄钟、足迹与完整维护，避免开发第二套领域模型。
+3. 重写或删除不再使用的旧页面、服务、schema、MCP 注册和测试；不要为了旧测试通过重新引入已取消的概念。
+4. 使用 v3 新库与 seed 验证完整流程，建库脚本 / schema migration 只承担新版本结构初始化，不增加旧数据转换逻辑。
+5. 每票提交时应用可构建、该票流程真实可用；还未实现的能力不以可点击假入口呈现。T10 收尾验收不代替每票自己的质量检查。
 
-```text
-GitHub → Vercel → Neon → Environment Variables → Migration → Login → Setup
-```
+## 12. 验收与交付标准
 
-Repository 提交 migrations。部署负责幂等 migration；Setup 不改 schema。
+### 12.1 用户流程
 
-首次登录后，`setupCompletedAt` 为空则进入 `/setup`。Setup 检查数据库/schema、从浏览器 timezone 提供默认值、设置 default focus/week start、展示 MCP endpoint 并标记完成。失败时给出可操作的修复信息；重复访问允许重新检查和更新。
+- 全新用户只输入目标标题就能来到可开始状态，未建目标无法绕过。
+- AI 连接但未写目标不能伪成功；真实写回可确认，无重复 Goal。
+- 有目标无 Task / Track 可计时，intent 不自动变 Task。
+- 同一 Task 多次执行，结束不误完成，明确完成才推进选择。
+- 周一结束留提示、周三一键继续；暂停则恢复原过程。
+- 番茄到时关页后再回来仍按截止点结算，休息 / 等待不计专注。
+- Web 与 MCP 可交替控制计时，另一端更新不会被旧页面覆盖。
+- 补录 / 更正 / 取消后日历、摘要和详情一致；归档目标历史可查。
+- 所有前端页面和状态采用新结构，移动端完整操作，管理功能仍可达。
 
-发布前必须用全新 Vercel Project 和 Neon Database 完成一次真实部署验证，不能只依赖文档假设。
+### 12.2 工程验证
 
----
+每票运行 lint、typecheck、unit、真实 PostgreSQL integration / contract、受影响 E2E 与 production build。状态机用可控制服务端时钟验证，不能等待真实 25 分钟，也不能只改浏览器时间冒充服务端到期。
 
-## 14. UI and error handling
+浏览器验收须提供实际桌面与 375px 移动状态证据；测试通过不代表视觉通过。MCP 用真实协议验证输入、结果、鉴权与跨端接管。核心时间、并发与空库初始化由集成测试覆盖。
 
-设计关键词：Calm、Minimal、Fast、Content-first、Keyboard-friendly。
+### 12.3 实施包
 
-- Desktop 优先，375px mobile 可用；
-- Today 只有一个明显 Primary CTA；
-- 轻量 Task/Next 更新可以 optimistic；
-- Session 与跨实体事务必须等待服务端确认；
-- loading、empty、error 和 retry 状态必须可访问、可理解。
-
-Service Layer 返回统一、可序列化的 domain error，至少包括：
-
-```text
-ACTIVE_SESSION_EXISTS
-SESSION_NOT_FOUND
-INVALID_SESSION_STATE
-SESSION_TIME_OVERLAP
-TASK_NOT_IN_TRACK
-TASK_NOT_PENDING
-TASK_ALREADY_COMPLETED
-INVALID_NEXT_TASK
-TRACK_NOT_ACTIVE
-GOAL_NOT_ACTIVE
-PARENT_HAS_ACTIVE_SESSION
-INVALID_POSITION_ORDER
-IDEMPOTENCY_KEY_REUSED
-UNAUTHORIZED
-```
-
-Web 映射成人类可读消息；MCP 返回 code、message 和必要 context，不能只返回 `Something went wrong`。
-
----
-
-## 15. Acceptance scenarios
-
-### 15.1 Core execution
-
-创建 Goal/Track，Web 或 MCP 批量创建 Tasks，首项自动成为 Next；从 Today 启动，刷新后计时正确；多次 pause/resume；Finish+Completed 后 Session、Task 和 Next 原子更新，History/Stats 立即反映结果。
-
-### 15.2 Active Session and cancel
-
-已有 active/paused Session 时启动第二个返回 `ACTIVE_SESSION_EXISTS` 与现有 Session。Cancel 后不再阻塞，默认 History 与统计不包含它，但审计查询可读取。
-
-### 15.3 Manual and overlap
-
-Web/MCP 均可补录与纠正。重叠时首次不写入并返回冲突；明确确认后保存，统计分别累加。
-
-### 15.4 Current Next integrity
-
-- 完成非 Current Next 不改变 Next；
-- 重排不改变 Next；
-- complete/skip/archive Current Next 自动推进；
-- reopen 不自动抢占 Next；
-- 非 pending Task 无法设为 Next。
-
-### 15.5 Parent lifecycle
-
-有 active Session 时不能完成或归档所属 Goal/Track。父级非 active 后不能开始新 Session；重新激活后子项与 Current Next 保持。
-
-### 15.6 Timezone and statistics
-
-跨午夜、周边界和 DST 按真实区间统计；History 只展示一条并归到开始日。
-
-### 15.7 Capability parity
-
-每项 Web 领域操作都有等价 MCP tool，并通过相同 service contract tests。MCP 可独立完成计划、排序、Next、执行/补录/纠正 Session、Distraction、History/Stats 和 Settings。
-
-### 15.8 Fresh deployment
-
-从全新 Vercel 与 Neon 出发：填写环境变量、自动 migration、登录、Setup、创建计划并开始 Focus，全程不执行手动 SQL。
-
----
-
-## 16. Testing requirements
-
-### Unit
-
-状态机、时间计算、Next advancement、排序、统计切分、幂等和 domain errors。
-
-### Integration
-
-真实 PostgreSQL 测试约束、事务、全局 Session 排他、并发 complete/next set、重叠确认、Service → DB 和 MCP → Service → DB。
-
-### Contract
-
-每项领域能力用同一组案例验证 Web adapter 与 MCP adapter 的输入、输出和错误一致性。
-
-### E2E
-
-- 登录与 Setup；
-- Goal → Track → batch Tasks → auto Next；
-- Start → refresh → pause/resume → Finish+Complete → Next；
-- Cancel 后重新开始；
-- History 补录、冲突确认和编辑；
-- mobile 375px Focus；
-- MCP 完整核心闭环；
-- 全新部署 smoke test。
-
----
-
-## 17. Explicit non-goals
-
-MVP 不包含：
-
-- 内置 AI Chat、LLM API、自动拆解、推荐引擎或 AI summary；
-- Calendar、deadline planning、通知或外部日历集成；
-- Habit、Pomodoro gamification、XP、等级或奖励；
-- Social、Team、Multi-user、Public profile；
-- 文件/图片附件、Markdown knowledge base 或富文本；
-- Nested subtasks、Kanban、Gantt 或复杂标签；
-- 原生移动 App、浏览器扩展；
-- hard delete；
-- OAuth 2.1 和 Hosted SaaS multi-tenancy。
-
----
-
-## 18. Core product sentence
-
-> **Time OS remembers the next action and records the work. The AI helps decide what that next action should be.**
+按 [ticket 索引](tickets/README.md) 的 T06 → T07 → T08 → T09 → T10 交付。每票包含 UI、所需数据与服务改动、MCP、异常路径、验证与文档；阶段尚未实现的能力不展示虚假可用入口。T06 可以先以正计时验证新执行体验，T08 完成两种模式。
