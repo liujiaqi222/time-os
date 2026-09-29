@@ -9,8 +9,8 @@ import type { UpdateSettingsInput } from "@/shared/schemas/settings";
 
 export type SettingsOutput = {
   timezone: string;
-  defaultFocusMinutes: number;
   weekStartsOn: number;
+  timerMode: "stopwatch" | "pomodoro";
   setupCompleted: boolean;
 };
 
@@ -19,8 +19,8 @@ function toOutput(
 ): SettingsOutput {
   return {
     timezone: settings.timezone,
-    defaultFocusMinutes: settings.defaultFocusMinutes,
     weekStartsOn: settings.weekStartsOn,
+    timerMode: settings.timerMode,
     setupCompleted: settings.setupCompletedAt !== null,
   };
 }

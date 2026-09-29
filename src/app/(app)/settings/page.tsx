@@ -1,6 +1,9 @@
 import { SettingsForm } from "@/components/settings-form";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { settingsService } from "@/services";
+import { timerModeLabel } from "@/shared/labels";
+import Link from "next/link";
 
 export default async function SettingsPage() {
   const settings = await settingsService.get({ actor: "web" });
@@ -20,9 +23,27 @@ export default async function SettingsPage() {
           <SettingsForm
             mode="settings"
             timezone={settings.timezone}
-            defaultFocusMinutes={settings.defaultFocusMinutes}
             weekStartsOn={settings.weekStartsOn}
           />
+          <p className="mt-4 text-xs text-stone-500">
+            当前计时偏好：{timerModeLabel[settings.timerMode]}
+            （番茄钟偏好设置随番茄钟功能提供）。
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>目标与任务</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-stone-600">
+          <p>完整的目标与任务管理入口。</p>
+          <Button
+            nativeButton={false}
+            variant="outline"
+            render={<Link href="/goals" />}
+          >
+            打开目标管理
+          </Button>
         </CardContent>
       </Card>
       <Card>

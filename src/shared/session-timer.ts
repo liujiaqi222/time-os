@@ -1,49 +1,40 @@
-export interface SessionTimerData {
-  startedAt: Date | string;
-  pausedAt?: Date | string | null;
-  totalPausedSeconds: number;
-  durationSeconds?: number | null;
-  status: "active" | "paused" | "completed" | "cancelled";
-}
+import type { FocusIntervalSlice } from "@/shared/focus-intervals";
 
-export function calculateElapsedSeconds(
-  session: SessionTimerData,
+/**
+ * Stopwatch helpers (PRD §6.2). The authoritative elapsed time of an
+ * observed Session is the sum of its focus intervals — never wall-clock
+ * minus stored pause seconds. All instants are server-provided; the client
+ * only renders and recalibrates against serverNow.
+ */
+
+export type { FocusIntervalSlice };
+
+/** Effective focus seconds of an observed Session at instant `now`. */
+export function focusSecondsOfIntervals(
+  intervals: readonly FocusIntervalSlice[],
   now: Date = new Date(),
 ): number {
-  if (session.status === "completed" || session.status === "cancelled") {
-    return Math.max(0, session.durationSeconds ?? 0);
+  let totalMs = 0;
+  for (const interval of intervals) {
+    const start = new Date(interval.startedAt).getTime();
+    const end = new Date(interval.endedAt ?? now).getTime();
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      totalMs += end - start;
+    }
   }
-
-  const startedAtMs = new Date(session.startedAt).getTime();
-  const totalPaused = session.totalPausedSeconds ?? 0;
-
-  if (session.status === "paused" && session.pausedAt) {
-    const pausedAtMs = new Date(session.pausedAt).getTime();
-    return Math.max(
-      0,
-      Math.floor((pausedAtMs - startedAtMs) / 1000) - totalPaused,
-    );
-  }
-
-  const nowMs = now.getTime();
-  return Math.max(0, Math.floor((nowMs - startedAtMs) / 1000) - totalPaused);
+  return Math.floor(totalMs / 1000);
 }
 
-export function calculateDurationSecondsOnFinish(
-  session: SessionTimerData,
+/** Remaining live seconds when the client only has serverNow + focus. */
+export function liveFocusSeconds(
+  focusSecondsAtServer: number,
+  serverNow: Date | string,
   now: Date = new Date(),
 ): number {
-  if (session.status === "paused" && session.pausedAt) {
-    const startedAtMs = new Date(session.startedAt).getTime();
-    const pausedAtMs = new Date(session.pausedAt).getTime();
-    const totalPaused = session.totalPausedSeconds ?? 0;
-    return Math.max(
-      0,
-      Math.floor((pausedAtMs - startedAtMs) / 1000) - totalPaused,
-    );
-  }
-
-  return calculateElapsedSeconds(session, now);
+  const delta = Math.floor(
+    (now.getTime() - new Date(serverNow).getTime()) / 1000,
+  );
+  return Math.max(0, focusSecondsAtServer + Math.max(0, delta));
 }
 
 export function formatTimeDigits(totalSeconds: number): string {

@@ -9,6 +9,7 @@ import {
   distractionService,
   historyService,
   planningService,
+  selectionService,
   sessionService,
   settingsService,
   statisticsService,
@@ -22,6 +23,7 @@ const handler = createMcpHandler(
     createTimeOsMcpServer({
       settingsService,
       planningService,
+      selectionService,
       sessionService,
       distractionService,
       dashboardService,

@@ -1,100 +1,76 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Archive, CircleCheck } from "lucide-react";
+import { useActionState } from "react";
+import { Archive, CircleCheck, RotateCcw, CircleMinus } from "lucide-react";
 
-import {
-  updatePlanningStatusAction,
-  type PlanningStatusState,
-} from "@/app/(app)/planning-actions";
-import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { updatePlanningStatusAction } from "@/app/(app)/planning-actions";
 import { Button } from "@/components/ui/button";
 
-type EntityType = "goal" | "track";
-type TargetStatus = "completed" | "archived";
+type PlanningStatusState =
+  { status: "success" } | { status: "error"; message: string } | undefined;
 
+/**
+ * Goal / Task lifecycle transition bound to the shared status action.
+ * Domain rejections (e.g. PARENT_HAS_ACTIVE_SESSION) surface inline next
+ * to the trigger — never as a raw page error (PRD §8.1). Full management
+ * confirmation flows arrive with T10.
+ */
 export function PlanningStatusAction({
   entityType,
-  entityId,
-  entityTitle,
-  status,
-  blockingSession,
+  id,
+  action,
+  label,
+  icon,
+  variant = "outline",
 }: {
-  entityType: EntityType;
-  entityId: string;
-  entityTitle: string;
-  status: TargetStatus;
-  blockingSession?: {
-    id: string;
-    trackTitle: string;
-    status: "active" | "paused";
-  } | null;
+  entityType: "goal" | "task";
+  id: string;
+  action: string;
+  label: string;
+  icon?: "check" | "archive" | "reactivate" | "skip";
+  variant?: "outline" | "ghost" | "default";
 }) {
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [state, action, pending] = useActionState<
+  const [state, formAction, pending] = useActionState<
     PlanningStatusState,
     FormData
   >(updatePlanningStatusAction, undefined);
 
-  const isComplete = status === "completed";
-  const entityLabel = entityType === "goal" ? "目标" : "推进线";
-  const actionLabel = isComplete ? "完成" : "归档";
-  const titleId = `status-dialog-${entityId}-${status}`;
+  const iconElement =
+    icon === "check" ? (
+      <CircleCheck className="size-3.5" aria-hidden="true" />
+    ) : icon === "archive" ? (
+      <Archive className="size-3.5" aria-hidden="true" />
+    ) : icon === "reactivate" ? (
+      <RotateCcw className="size-3.5" aria-hidden="true" />
+    ) : icon === "skip" ? (
+      <CircleMinus className="size-3.5" aria-hidden="true" />
+    ) : null;
 
   return (
-    <>
+    <form
+      action={formAction}
+      className="inline-flex flex-col items-start gap-1"
+    >
+      <input type="hidden" name="entityType" value={entityType} />
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="action" value={action} />
       <Button
-        type="button"
+        type="submit"
         size="xs"
-        variant={isComplete ? "outline" : "ghost"}
-        onClick={() => setOpen(true)}
+        variant={variant}
+        disabled={pending}
+        className={
+          variant === "default" ? "bg-stone-900 text-stone-50" : undefined
+        }
       >
-        {isComplete ? <CircleCheck /> : <Archive />}
-        {actionLabel}
+        {iconElement}
+        {pending ? "处理中…" : label}
       </Button>
-
-      {open && (
-        <form action={action}>
-          <input type="hidden" name="entityType" value={entityType} />
-          <input type="hidden" name="id" value={entityId} />
-          <input type="hidden" name="status" value={status} />
-          <ConfirmationDialog
-            titleId={titleId}
-            title={
-              blockingSession
-                ? `暂时无法${actionLabel}${entityLabel}`
-                : `${actionLabel}「${entityTitle}」？`
-            }
-            description={
-              blockingSession ? (
-                <>
-                  「{blockingSession.trackTitle}」中还有一段
-                  {blockingSession.status === "paused" ? "已暂停" : "进行中"}
-                  的专注。请先完成或取消这段专注，再回来调整计划状态。
-                </>
-              ) : isComplete ? (
-                `完成后，这个${entityLabel}会从进行中的计划中收起；任务和历史记录都会保留，也可以之后重新启用。`
-              ) : (
-                `归档后，这个${entityLabel}会从进行中的计划中收起；内容不会删除，也可以之后重新启用。`
-              )
-            }
-            confirmLabel={
-              blockingSession ? "返回当前专注" : `确认${actionLabel}`
-            }
-            confirmType={blockingSession ? "button" : "submit"}
-            pending={pending}
-            error={state?.status === "error" ? state.message : null}
-            onClose={() => setOpen(false)}
-            onConfirm={
-              blockingSession
-                ? () => router.push(`/focus/${blockingSession.id}`)
-                : undefined
-            }
-          />
-        </form>
+      {state?.status === "error" && (
+        <span role="alert" className="max-w-64 text-left text-xs text-red-600">
+          {state.message}
+        </span>
       )}
-    </>
+    </form>
   );
 }

@@ -6,6 +6,13 @@ import { DomainError } from "@/shared/domain-error";
 /**
  * Shared plumbing for the service layer: zod bridging, advisory locking and
  * the transaction type every service composes with. One home, no copies.
+ *
+ * Global advisory-lock order (deadlock avoidance, PRD §10):
+ *   sessions:running → app:selection → sessions:timeline
+ *     → goal:{goalId} → goals:order → session:{sessionId}
+ * Any transaction that both validates open-Session state and writes the
+ * selection takes `sessions:running` first (session_start, Task
+ * transitions, Goal lifecycle changes).
  */
 
 export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];

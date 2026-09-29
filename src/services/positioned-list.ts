@@ -1,19 +1,19 @@
 import { and, asc, eq, gt, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 
-import { goals, tasks, tracks } from "@/db/schema";
+import { goals, tasks } from "@/db/schema";
 import { DomainError } from "@/shared/domain-error";
 import type { Database } from "@/db/client";
 import type { Transaction } from "@/services/service-kit";
 
 /**
- * Internal implementation module for the three positioned lists
- * (Goals, Tracks, Tasks). One implementation of two-phase renumbering and
- * cursor pagination; the generics stay inside the implementation — the
- * external Planning interface never sees them.
+ * Internal implementation module for the two positioned lists (Goals,
+ * Tasks). One implementation of two-phase renumbering and cursor
+ * pagination; the generics stay inside the implementation — the external
+ * Planning interface never sees them.
  */
 
-type PositionedListTable = typeof goals | typeof tracks | typeof tasks;
+type PositionedListTable = typeof goals | typeof tasks;
 
 export interface Page<T> {
   items: T[];
@@ -25,7 +25,7 @@ export interface Page<T> {
  *
  * 1. Validate that `ids` contains every item of the container exactly once.
  * 2. Park every row above the current maximum (no phase-2 collisions,
- *    including under the tasks (track_id, position) unique index).
+ *    including under the tasks (goal_id, position) unique index).
  * 3. Renumber densely 1..n in the requested order.
  *
  * The caller owns the advisory lock and the final read-back.
@@ -75,8 +75,7 @@ export async function renumberPositions(
 /**
  * Cursor pagination over a positioned list. `scope` pins the container
  * (and cursor resolution) — the parent id condition; `filters` are the
- * caller's status conditions and never affect cursor resolution, matching
- * the historical listGoals/listTracks/listTasks behavior.
+ * caller's status conditions and never affect cursor resolution.
  */
 export async function listPositionPage<TTable extends PositionedListTable>(
   db: Database | Transaction,

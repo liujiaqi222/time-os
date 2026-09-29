@@ -16,11 +16,6 @@ export const timezoneSchema = z
 
 export const updateSettingsSchema = z.object({
   timezone: timezoneSchema,
-  defaultFocusMinutes: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(24 * 60),
   weekStartsOn: z.coerce
     .number()
     .int()

@@ -1,421 +1,497 @@
-import { eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, isNull, and } from "drizzle-orm";
 
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
-import { goals, sessions, tasks, tracks } from "@/db/schema";
-import type { Distraction, Session, Task, Track } from "@/db/schema";
+import {
+  focusIntervals,
+  goals,
+  sessions,
+  tasks,
+  type Distraction,
+  type FocusInterval,
+  type Goal,
+  type Session,
+  type Task,
+} from "@/db/schema";
 import { DomainError } from "@/shared/domain-error";
 import {
   sessionCancelSchema,
-  sessionFinishInputSchema,
+  sessionFinishSchema,
   sessionNoteUpdateSchema,
   sessionPauseSchema,
+  sessionResumeHintUpdateSchema,
   sessionResumeSchema,
-  sessionReviewSchema,
   sessionStartSchema,
-  type SessionFinishInput,
-  type SessionReviewInput,
+  type SessionNoteUpdateInput,
+  type SessionResumeHintUpdateInput,
   type SessionStartInput,
 } from "@/shared/schemas/session";
-import { calculateDurationSecondsOnFinish } from "@/shared/session-timer";
-import { currentNextForTrack, transitionTask } from "@/services/current-next";
-import type { DistractionService } from "@/services/distraction";
+import { focusSecondsOfIntervals } from "@/shared/session-timer";
+import { applySelection } from "@/services/selection";
 import { requestHashOf, withIdempotency } from "@/services/idempotency";
-import {
-  invalid,
-  lockScope,
-  parsed,
-  type Transaction,
-} from "@/services/service-kit";
+import { lockScope, parsed, type Transaction } from "@/services/service-kit";
 
-export type { Session } from "@/db/schema";
+export type { Session, FocusInterval } from "@/db/schema";
 
-export interface SessionWithRelations extends Session {
-  track: Track;
+/**
+ * The stopwatch execution loop (PRD §6.1–6.2, §6.5).
+ *
+ * - start validates the Goal/Task, opens a focus interval and syncs the
+ *   selection; pause closes the interval, resume opens a new one, finish
+ *   closes and freezes the authoritative duration from the intervals.
+ * - pause/resume/finish/cancel are idempotent: a lost response can be
+ *   retried without duplicating Sessions or intervals.
+ * - note and resumeHint carry independent content versions; a stale
+ *   expectedVersion is a VERSION_CONFLICT, never a silent overwrite.
+ */
+
+export interface SessionView extends Session {
+  goal: Goal;
   task: Task | null;
-  distractions?: Distraction[];
+  intervals: FocusInterval[];
+  serverNow: string;
+  /** Authoritative focus seconds at serverNow (PRD §6.1). */
+  focusSeconds: number;
+  /** Operations available in the current state. */
+  actions: string[];
+  /** Set on finish when the supplied note version was stale. */
+  noteConflict?: boolean;
 }
 
-export interface SessionReviewResult {
-  session: Session;
-  task: Task | null;
-  nextTask: Task | null;
+export interface SessionDetail extends SessionView {
+  distractions: Distraction[];
+}
+
+/** Options for finishSession; `id` comes from the call itself. */
+export interface SessionFinishOptions {
+  note?: string | null;
+  noteExpectedVersion?: number;
 }
 
 export interface SessionService {
-  getActiveSession(
-    context: AuthenticatedContext,
-  ): Promise<SessionWithRelations | null>;
-  getSession(
-    context: AuthenticatedContext,
-    id: string,
-  ): Promise<SessionWithRelations>;
+  getActiveSession(context: AuthenticatedContext): Promise<SessionView | null>;
+  getSession(context: AuthenticatedContext, id: string): Promise<SessionDetail>;
   startSession(
     context: AuthenticatedContext,
     input: SessionStartInput,
-  ): Promise<Session>;
-  pauseSession(context: AuthenticatedContext, id: string): Promise<Session>;
-  resumeSession(context: AuthenticatedContext, id: string): Promise<Session>;
+  ): Promise<SessionView>;
+  pauseSession(context: AuthenticatedContext, id: string): Promise<SessionView>;
+  resumeSession(
+    context: AuthenticatedContext,
+    id: string,
+  ): Promise<SessionView>;
   finishSession(
     context: AuthenticatedContext,
     id: string,
-    input?: SessionFinishInput,
-  ): Promise<Session>;
-  cancelSession(context: AuthenticatedContext, id: string): Promise<Session>;
-  finishSessionReview(
-    context: AuthenticatedContext,
-    input: SessionReviewInput,
-  ): Promise<SessionReviewResult>;
-  updateSessionNote(
+    input?: SessionFinishOptions,
+  ): Promise<SessionView>;
+  cancelSession(
     context: AuthenticatedContext,
     id: string,
-    note: string | null,
-  ): Promise<Session>;
+  ): Promise<SessionView>;
+  updateNote(
+    context: AuthenticatedContext,
+    input: SessionNoteUpdateInput,
+  ): Promise<SessionView>;
+  updateResumeHint(
+    context: AuthenticatedContext,
+    input: SessionResumeHintUpdateInput,
+  ): Promise<SessionView>;
+}
+
+export function availableSessionActions(status: Session["status"]): string[] {
+  switch (status) {
+    case "active":
+      return [
+        "pause",
+        "finish",
+        "cancel",
+        "note_update",
+        "resume_hint_update",
+        "distraction_log",
+      ];
+    case "paused":
+      return [
+        "resume",
+        "finish",
+        "cancel",
+        "note_update",
+        "resume_hint_update",
+        "distraction_log",
+      ];
+    case "completed":
+      return ["resume_hint_update"];
+    default:
+      return [];
+  }
+}
+
+async function loadIntervals(
+  tx: Database | Transaction,
+  sessionId: string,
+): Promise<FocusInterval[]> {
+  return tx
+    .select()
+    .from(focusIntervals)
+    .where(eq(focusIntervals.sessionId, sessionId))
+    .orderBy(asc(focusIntervals.startedAt), asc(focusIntervals.id));
+}
+
+async function buildView(
+  tx: Database | Transaction,
+  session: Session,
+  now: Date,
+): Promise<SessionView> {
+  const [[goal], [task], intervals] = await Promise.all([
+    tx.select().from(goals).where(eq(goals.id, session.goalId)).limit(1),
+    session.taskId
+      ? tx.select().from(tasks).where(eq(tasks.id, session.taskId)).limit(1)
+      : Promise.resolve([null]),
+    loadIntervals(tx, session.id),
+  ]);
+  if (!goal)
+    throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", {
+      goalId: session.goalId,
+    });
+  return {
+    ...session,
+    goal,
+    task: task ?? null,
+    intervals,
+    serverNow: now.toISOString(),
+    focusSeconds: focusSecondsOfIntervals(intervals, now),
+    actions: availableSessionActions(session.status),
+  };
+}
+
+async function findSessionRow(
+  tx: Database | Transaction,
+  id: string,
+): Promise<Session> {
+  if (!id) {
+    throw new DomainError("INVALID_INPUT", "Session id is required.", {
+      field: "id",
+    });
+  }
+  const [session] = await tx
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  if (!session)
+    throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
+      sessionId: id,
+    });
+  return session;
+}
+
+/** Close every open interval of the Session at `now` (pause/finish/cancel). */
+async function closeOpenIntervals(
+  tx: Transaction,
+  sessionId: string,
+  now: Date,
+): Promise<void> {
+  await tx
+    .update(focusIntervals)
+    .set({ endedAt: now, updatedAt: now })
+    .where(
+      and(
+        eq(focusIntervals.sessionId, sessionId),
+        isNull(focusIntervals.endedAt),
+      ),
+    );
 }
 
 export function createSessionService(
   database: Database,
-  deps: { distractionService: Pick<DistractionService, "listDistractions"> },
+  deps: {
+    distractionService: Pick<
+      import("@/services/distraction").DistractionService,
+      "listDistractions"
+    >;
+  },
 ): SessionService {
   const { distractionService } = deps;
 
-  async function findActiveSessionRow(
+  async function viewOfRow(
     tx: Database | Transaction,
-  ): Promise<SessionWithRelations | null> {
-    const rows = await tx
-      .select({
-        session: sessions,
-        track: tracks,
-        task: tasks,
-      })
-      .from(sessions)
-      .innerJoin(tracks, eq(sessions.trackId, tracks.id))
-      .leftJoin(tasks, eq(sessions.taskId, tasks.id))
-      .where(inArray(sessions.status, ["active", "paused"] as const))
-      .limit(1);
-
-    if (!rows.length || !rows[0]) return null;
-    return {
-      ...rows[0].session,
-      track: rows[0].track,
-      task: rows[0].task,
-    };
+    session: Session,
+    now = new Date(),
+  ): Promise<SessionView> {
+    return buildView(tx, session, now);
   }
 
   return {
     async getActiveSession(context) {
       void context;
-      return findActiveSessionRow(database);
+      const now = new Date();
+      const [row] = await database
+        .select()
+        .from(sessions)
+        .where(inArray(sessions.status, ["active", "paused"] as const))
+        .limit(1);
+      return row ? viewOfRow(database, row, now) : null;
     },
 
     async getSession(context, id) {
-      if (!id) invalid("Session ID is required.", "id");
-
-      // Independent reads — run in parallel (saves a round trip). The
-      // Distraction module owns the distraction query; this composite read
-      // composes its interface instead of re-querying the table.
-      const [rows, distractionRows] = await Promise.all([
-        database
-          .select({
-            session: sessions,
-            track: tracks,
-            task: tasks,
-          })
-          .from(sessions)
-          .innerJoin(tracks, eq(sessions.trackId, tracks.id))
-          .leftJoin(tasks, eq(sessions.taskId, tasks.id))
-          .where(eq(sessions.id, id))
-          .limit(1),
+      void context;
+      const now = new Date();
+      const session = await findSessionRow(database, id);
+      const [view, distractionRows] = await Promise.all([
+        viewOfRow(database, session, now),
         distractionService.listDistractions(context, {
           sessionId: id,
           includeArchived: true,
         }),
       ]);
-
-      if (!rows.length || !rows[0]) {
-        throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-          sessionId: id,
-        });
-      }
-
-      return {
-        ...rows[0].session,
-        track: rows[0].track,
-        task: rows[0].task,
-        distractions: distractionRows,
-      };
+      return { ...view, distractions: distractionRows };
     },
 
     async startSession(context, input) {
       const value = parsed(sessionStartSchema.safeParse(input));
       const requestHash = requestHashOf({
-        trackId: value.trackId,
+        goalId: value.goalId,
         taskId: value.taskId ?? null,
-        plannedMinutes: value.plannedMinutes ?? null,
+        timerMode: value.timerMode,
+        intent: value.intent ?? null,
       });
 
       return database.transaction(async (tx) => {
+        // Global open-Session exclusivity first, then the selection sync
+        // (global lock order: sessions:running → app:selection).
         await lockScope(tx, "sessions:running");
-        await lockScope(tx, "sessions:timeline");
+        await lockScope(tx, "app:selection");
 
-        // Claim / replay / record discipline lives in the idempotency
-        // module — the same implementation tasks_create uses and
-        // session_log will reuse (PRD §4.7).
-        return withIdempotency({
+        const startedAt = new Date();
+        const session = await withIdempotency({
           tx,
           operation: "session_start",
           key: value.idempotencyKey,
           requestHash,
           replay: async (recorded) => {
-            const existingSessionId = (
-              recorded as { sessionId?: string } | null
-            )?.sessionId;
-            if (!existingSessionId) return null;
-            const [session] = await tx
+            const sessionId = (recorded as { sessionId?: string } | null)
+              ?.sessionId;
+            if (!sessionId) return null;
+            const [row] = await tx
               .select()
               .from(sessions)
-              .where(eq(sessions.id, existingSessionId))
+              .where(eq(sessions.id, sessionId))
               .limit(1);
-            return session ?? null;
+            return row ?? null;
           },
           run: async () => {
-            // Check if an active or paused session already exists
-            const [existingRunning] = await tx
+            const [existingOpen] = await tx
               .select({ id: sessions.id })
               .from(sessions)
               .where(inArray(sessions.status, ["active", "paused"] as const))
               .limit(1);
-
-            if (existingRunning) {
+            if (existingOpen) {
               throw new DomainError(
                 "ACTIVE_SESSION_EXISTS",
-                "An active or paused session already exists.",
-                { sessionId: existingRunning.id },
+                "An unfinished Session already exists. Finish or cancel it first.",
+                { sessionId: existingOpen.id },
               );
             }
 
-            // Validate Track and its parent Goal
-            const [trackWithGoal] = await tx
-              .select({
-                track: tracks,
-                goalStatus: goals.status,
-              })
-              .from(tracks)
-              .innerJoin(goals, eq(tracks.goalId, goals.id))
-              .where(eq(tracks.id, value.trackId))
+            const [goal] = await tx
+              .select()
+              .from(goals)
+              .where(eq(goals.id, value.goalId))
               .limit(1);
-
-            if (!trackWithGoal) {
-              throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
-                trackId: value.trackId,
+            if (!goal)
+              throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", {
+                goalId: value.goalId,
               });
-            }
-
-            if (trackWithGoal.goalStatus !== "active") {
+            if (goal.status !== "active")
               throw new DomainError(
                 "GOAL_NOT_ACTIVE",
-                "Cannot start a session under an inactive Goal.",
+                "Reactivate the Goal before starting a Session.",
+                { goalId: goal.id },
               );
-            }
 
-            if (trackWithGoal.track.status !== "active") {
-              throw new DomainError(
-                "TRACK_NOT_ACTIVE",
-                "Cannot start a session under an inactive Track.",
-              );
-            }
-
-            // Validate Task if provided
+            // Omitted or null taskId = goal-only; an attached Task must be
+            // explicit, in the same Goal and pending (PRD §9.2).
             if (value.taskId) {
               const [task] = await tx
                 .select()
                 .from(tasks)
                 .where(eq(tasks.id, value.taskId))
                 .limit(1);
-
-              if (!task) {
+              if (!task)
                 throw new DomainError("TASK_NOT_FOUND", "Task was not found.", {
                   taskId: value.taskId,
                 });
-              }
-
-              if (task.trackId !== value.trackId) {
+              if (task.goalId !== value.goalId)
                 throw new DomainError(
-                  "TASK_NOT_IN_TRACK",
-                  "Task does not belong to the selected Track.",
+                  "TASK_NOT_IN_GOAL",
+                  "Task does not belong to this Goal.",
+                  { taskId: task.id, goalId: value.goalId },
                 );
-              }
-
-              if (task.status !== "pending") {
+              if (task.status !== "pending")
                 throw new DomainError(
-                  task.status === "completed"
-                    ? "TASK_ALREADY_COMPLETED"
-                    : "TASK_NOT_PENDING",
-                  "Only pending tasks can be started.",
+                  "TASK_NOT_PENDING",
+                  "Only a pending Task can be executed.",
+                  { taskId: task.id },
                 );
-              }
             }
 
-            const createdVia = context.actor === "mcp" ? "mcp" : "web";
-            const [session] = await tx
+            const [created] = await tx
               .insert(sessions)
               .values({
-                trackId: value.trackId,
+                goalId: value.goalId,
                 taskId: value.taskId ?? null,
                 status: "active",
                 entryMode: "timer",
-                createdVia,
-                plannedMinutes: value.plannedMinutes ?? null,
-                startedAt: new Date(),
-                totalPausedSeconds: 0,
-                durationSeconds: null,
-                pausedAt: null,
+                createdVia: context.actor === "mcp" ? "mcp" : "web",
+                timerMode: "stopwatch",
+                timeBasis: "observed",
+                timerConfig: null,
+                intent: value.intent ?? null,
                 note: null,
+                resumeHint: null,
+                startedAt,
+                endedAt: null,
+                durationSeconds: null,
               })
               .returning();
 
+            await tx.insert(focusIntervals).values({
+              sessionId: created!.id,
+              phase: "focus",
+              startedAt,
+            });
+
+            // A successful start syncs the selection (PRD §5.3).
+            await applySelection(tx, {
+              goalId: value.goalId,
+              taskId: value.taskId ?? null,
+            });
+
             return {
-              value: session!,
-              result: { sessionId: session!.id },
-              resultRef: session!.id,
+              value: created!,
+              result: { sessionId: created!.id },
+              resultRef: created!.id,
             };
           },
         });
+
+        return viewOfRow(tx, session, startedAt);
       });
     },
 
-    async pauseSession(_context, id) {
-      void _context;
+    async pauseSession(context, id) {
+      void context;
       parsed(sessionPauseSchema.safeParse({ id }));
-
       return database.transaction(async (tx) => {
         await lockScope(tx, `session:${id}`);
+        const session = await findSessionRow(tx, id);
+        const now = new Date();
 
-        const [session] = await tx
-          .select()
-          .from(sessions)
-          .where(eq(sessions.id, id))
-          .limit(1);
-
-        if (!session) {
-          throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-            sessionId: id,
-          });
-        }
-
-        // Idempotent: already paused
         if (session.status === "paused") {
-          return session;
+          return viewOfRow(tx, session, now);
         }
-
         if (session.status !== "active") {
           throw new DomainError(
             "INVALID_SESSION_STATE",
-            "Only an active session can be paused.",
+            "Only an active Session can be paused.",
+            { status: session.status },
           );
         }
 
+        await closeOpenIntervals(tx, id, now);
         const [updated] = await tx
           .update(sessions)
           .set({
             status: "paused",
-            pausedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(sessions.id, id))
-          .returning();
-
-        return updated!;
-      });
-    },
-
-    async resumeSession(_context, id) {
-      void _context;
-      parsed(sessionResumeSchema.safeParse({ id }));
-
-      return database.transaction(async (tx) => {
-        await lockScope(tx, `session:${id}`);
-
-        const [session] = await tx
-          .select()
-          .from(sessions)
-          .where(eq(sessions.id, id))
-          .limit(1);
-
-        if (!session) {
-          throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-            sessionId: id,
-          });
-        }
-
-        // Idempotent: already active
-        if (session.status === "active") {
-          return session;
-        }
-
-        if (session.status !== "paused") {
-          throw new DomainError(
-            "INVALID_SESSION_STATE",
-            "Only a paused session can be resumed.",
-          );
-        }
-
-        const now = new Date();
-        const pauseElapsed = session.pausedAt
-          ? Math.max(
-              0,
-              Math.floor((now.getTime() - session.pausedAt.getTime()) / 1000),
-            )
-          : 0;
-
-        const [updated] = await tx
-          .update(sessions)
-          .set({
-            status: "active",
-            pausedAt: null,
-            totalPausedSeconds: session.totalPausedSeconds + pauseElapsed,
+            revision: session.revision + 1,
             updatedAt: now,
           })
           .where(eq(sessions.id, id))
           .returning();
-
-        return updated!;
+        return viewOfRow(tx, updated!, now);
       });
     },
 
-    async finishSession(_context, id, input) {
-      void _context;
-      if (input) parsed(sessionFinishInputSchema.safeParse(input));
-
+    async resumeSession(context, id) {
+      void context;
+      parsed(sessionResumeSchema.safeParse({ id }));
       return database.transaction(async (tx) => {
         await lockScope(tx, `session:${id}`);
+        const session = await findSessionRow(tx, id);
+        const now = new Date();
 
-        const [session] = await tx
-          .select()
-          .from(sessions)
-          .where(eq(sessions.id, id))
-          .limit(1);
-
-        if (!session) {
-          throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-            sessionId: id,
-          });
+        if (session.status === "active") {
+          return viewOfRow(tx, session, now);
         }
-
-        // Idempotent finish
-        if (session.status === "completed") {
-          return session;
-        }
-
-        if (session.status !== "active" && session.status !== "paused") {
+        if (session.status !== "paused") {
           throw new DomainError(
             "INVALID_SESSION_STATE",
-            "Only active or paused sessions can be finished.",
+            "Only a paused Session can be resumed.",
+            { status: session.status },
           );
         }
 
+        await tx.insert(focusIntervals).values({
+          sessionId: id,
+          phase: "focus",
+          startedAt: now,
+        });
+        const [updated] = await tx
+          .update(sessions)
+          .set({
+            status: "active",
+            revision: session.revision + 1,
+            updatedAt: now,
+          })
+          .where(eq(sessions.id, id))
+          .returning();
+        return viewOfRow(tx, updated!, now);
+      });
+    },
+
+    async finishSession(context, id, input) {
+      void context;
+      const value = parsed(
+        sessionFinishSchema.safeParse({ ...(input ?? {}), id }),
+      );
+
+      return database.transaction(async (tx) => {
+        await lockScope(tx, `session:${id}`);
+        const session = await findSessionRow(tx, value.id);
         const now = new Date();
-        const durationSeconds = calculateDurationSecondsOnFinish(session, now);
+
+        // Idempotent: a lost response retry returns the same result.
+        if (session.status === "completed") {
+          return viewOfRow(tx, session, now);
+        }
+        if (session.status !== "active" && session.status !== "paused") {
+          throw new DomainError(
+            "INVALID_SESSION_STATE",
+            "Only an active or paused Session can be finished.",
+            { status: session.status },
+          );
+        }
+
+        await closeOpenIntervals(tx, id, now);
+        const intervals = await loadIntervals(tx, id);
+        const durationSeconds = focusSecondsOfIntervals(intervals, now);
+
+        // Optional final note with version check (PRD §6.5): a stale note
+        // never overwrites newer content, and never blocks the time save.
+        let noteConflict = false;
+        let note = session.note;
+        let noteVersion = session.noteVersion;
+        if (value.note !== undefined) {
+          if (
+            value.noteExpectedVersion === undefined ||
+            value.noteExpectedVersion === session.noteVersion
+          ) {
+            note = value.note;
+            noteVersion = session.noteVersion + 1;
+          } else {
+            noteConflict = true;
+          }
+        }
 
         const [updated] = await tx
           .update(sessions)
@@ -423,240 +499,124 @@ export function createSessionService(
             status: "completed",
             endedAt: now,
             durationSeconds,
-            pausedAt: null,
-            note: input?.note !== undefined ? input.note : session.note,
+            note,
+            noteVersion,
+            revision: session.revision + 1,
             updatedAt: now,
           })
           .where(eq(sessions.id, id))
           .returning();
 
-        return updated!;
+        const view = await viewOfRow(tx, updated!, now);
+        return noteConflict ? { ...view, noteConflict: true } : view;
       });
     },
 
-    async cancelSession(_context, id) {
-      void _context;
+    async cancelSession(context, id) {
+      void context;
       parsed(sessionCancelSchema.safeParse({ id }));
-
       return database.transaction(async (tx) => {
         await lockScope(tx, `session:${id}`);
-
-        const [session] = await tx
-          .select()
-          .from(sessions)
-          .where(eq(sessions.id, id))
-          .limit(1);
-
-        if (!session) {
-          throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-            sessionId: id,
-          });
-        }
-
-        // Idempotent cancel
-        if (session.status === "cancelled") {
-          return session;
-        }
-
-        // Completed records may be cancelled as a reversible correction;
-        // cancelled records remain readable but can never be revived.
+        const session = await findSessionRow(tx, id);
         const now = new Date();
+
+        if (session.status === "cancelled") {
+          return viewOfRow(tx, session, now);
+        }
+
+        await closeOpenIntervals(tx, id, now);
         const [updated] = await tx
           .update(sessions)
           .set({
             status: "cancelled",
             endedAt: now,
-            pausedAt: null,
+            revision: session.revision + 1,
             updatedAt: now,
           })
           .where(eq(sessions.id, id))
           .returning();
-
-        return updated!;
+        return viewOfRow(tx, updated!, now);
       });
     },
 
-    async finishSessionReview(_context, input) {
-      void _context;
-      const value = parsed(sessionReviewSchema.safeParse(input));
-
+    async updateNote(context, input) {
+      void context;
+      const value = parsed(sessionNoteUpdateSchema.safeParse(input));
       return database.transaction(async (tx) => {
-        await lockScope(tx, `session:${value.sessionId}`);
+        await lockScope(tx, `session:${value.id}`);
+        const session = await findSessionRow(tx, value.id);
+        const now = new Date();
 
-        const [session] = await tx
-          .select()
-          .from(sessions)
-          .where(eq(sessions.id, value.sessionId))
-          .limit(1);
-
-        if (!session) {
-          throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-            sessionId: value.sessionId,
-          });
-        }
-
-        // If already completed: idempotent early-return.
-        // Safety check: if the task is still pending but outcome requires a
-        // status change, the session was likely finished via finishSession()
-        // without processing the task. In that case, proceed to apply the
-        // task outcome instead of returning stale data.
-        if (session.status === "completed") {
-          let taskNeedsProcessing = false;
-          if (
-            session.taskId &&
-            (value.outcome === "completed" || value.outcome === "skip")
-          ) {
-            const [task] = await tx
-              .select()
-              .from(tasks)
-              .where(eq(tasks.id, session.taskId))
-              .limit(1);
-            if (task?.status === "pending") {
-              taskNeedsProcessing = true;
-            }
-          }
-
-          if (!taskNeedsProcessing) {
-            const [task] = session.taskId
-              ? await tx
-                  .select()
-                  .from(tasks)
-                  .where(eq(tasks.id, session.taskId))
-                  .limit(1)
-              : [null];
-            return {
-              session,
-              task: task ?? null,
-              nextTask: await currentNextForTrack(tx, session.trackId),
-            };
-          }
-          // Fall through to process the task outcome on the already-completed session
-        }
-
-        if (
-          session.status !== "active" &&
-          session.status !== "paused" &&
-          session.status !== "completed"
-        ) {
+        if (session.status === "cancelled") {
           throw new DomainError(
             "INVALID_SESSION_STATE",
-            "Only active or paused sessions can be finished.",
+            "A cancelled Session keeps its text as-is.",
+            { status: session.status },
           );
         }
-
-        const sessionAlreadyCompleted = session.status === "completed";
-
-        let updatedTask: Task | null = null;
-        let nextTask: Task | null = null;
-
-        if (value.outcome === "completed" || value.outcome === "skip") {
-          if (!session.taskId) {
-            throw new DomainError(
-              "INVALID_INPUT",
-              "Cannot complete or skip a task on a session without a task.",
-            );
-          }
-
-          // The CurrentNext module owns the lock discipline, task validation
-          // and pointer advancement — the same implementation Planning
-          // transitions use (PRD §6.3).
-          const transitioned = await transitionTask(
-            tx,
-            session.taskId,
-            value.outcome === "completed" ? "completed" : "skipped",
-          );
-          updatedTask = transitioned.affectedTask;
-          nextTask = transitioned.nextTask;
-        } else {
-          // continue_later or no outcome: leave the task and pointer alone.
-          if (session.taskId) {
-            const [task] = await tx
-              .select()
-              .from(tasks)
-              .where(eq(tasks.id, session.taskId))
-              .limit(1);
-            updatedTask = task ?? null;
-          }
-          nextTask = await currentNextForTrack(tx, session.trackId);
-        }
-
-        const now = new Date();
-        // Skip session finishing if it was already completed (fall-through
-        // from the idempotent check above where only the task needed processing)
-        if (sessionAlreadyCompleted) {
-          // Update the note if a new one was provided
-          if (value.note !== undefined && value.note !== session.note) {
-            await tx
-              .update(sessions)
-              .set({ note: value.note, updatedAt: now })
-              .where(eq(sessions.id, value.sessionId));
-          }
-          return {
-            session: {
-              ...session,
-              note: value.note !== undefined ? value.note : session.note,
+        if (value.expectedVersion !== session.noteVersion) {
+          throw new DomainError(
+            "VERSION_CONFLICT",
+            "The note changed elsewhere. Reload the latest version and retry.",
+            {
+              expectedVersion: value.expectedVersion,
+              currentVersion: session.noteVersion,
             },
-            task: updatedTask,
-            nextTask,
-          };
+          );
         }
 
-        const durationSeconds = calculateDurationSecondsOnFinish(session, now);
-
-        const [completedSession] = await tx
+        const [updated] = await tx
           .update(sessions)
           .set({
-            status: "completed",
-            endedAt: now,
-            durationSeconds,
-            pausedAt: null,
-            note: value.note !== undefined ? value.note : session.note,
+            note: value.note,
+            noteVersion: session.noteVersion + 1,
+            revision: session.revision + 1,
             updatedAt: now,
           })
-          .where(eq(sessions.id, value.sessionId))
+          .where(eq(sessions.id, value.id))
           .returning();
-
-        return {
-          session: completedSession!,
-          task: updatedTask,
-          nextTask,
-        };
+        return viewOfRow(tx, updated!, now);
       });
     },
 
-    async updateSessionNote(_context, id, note) {
-      void _context;
-      parsed(sessionNoteUpdateSchema.safeParse({ id, note }));
+    async updateResumeHint(context, input) {
+      void context;
+      const value = parsed(sessionResumeHintUpdateSchema.safeParse(input));
+      return database.transaction(async (tx) => {
+        await lockScope(tx, `session:${value.id}`);
+        const session = await findSessionRow(tx, value.id);
+        const now = new Date();
 
-      const [existing] = await database
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, id))
-        .limit(1);
+        if (session.status === "cancelled") {
+          throw new DomainError(
+            "INVALID_SESSION_STATE",
+            "A cancelled Session keeps its text as-is.",
+            { status: session.status },
+          );
+        }
+        if (value.expectedVersion !== session.resumeHintVersion) {
+          throw new DomainError(
+            "VERSION_CONFLICT",
+            "The resume hint changed elsewhere. Reload the latest version and retry.",
+            {
+              expectedVersion: value.expectedVersion,
+              currentVersion: session.resumeHintVersion,
+            },
+          );
+        }
 
-      if (!existing) {
-        throw new DomainError("SESSION_NOT_FOUND", "Session was not found.", {
-          sessionId: id,
-        });
-      }
-
-      if (existing.status !== "active" && existing.status !== "paused") {
-        throw new DomainError(
-          "INVALID_SESSION_STATE",
-          "Session note can only be auto-saved while session is active or paused.",
-        );
-      }
-
-      const [updated] = await database
-        .update(sessions)
-        .set({
-          note,
-          updatedAt: new Date(),
-        })
-        .where(eq(sessions.id, id))
-        .returning();
-
-      return updated!;
+        const [updated] = await tx
+          .update(sessions)
+          .set({
+            resumeHint: value.resumeHint,
+            resumeHintVersion: session.resumeHintVersion + 1,
+            revision: session.revision + 1,
+            updatedAt: now,
+          })
+          .where(eq(sessions.id, value.id))
+          .returning();
+        return viewOfRow(tx, updated!, now);
+      });
     },
   };
 }

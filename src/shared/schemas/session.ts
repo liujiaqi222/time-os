@@ -7,62 +7,71 @@ export const sessionStatusSchema = z.enum([
   "cancelled",
 ]);
 
-export const sessionOutcomeSchema = z.enum([
-  "continue_later",
-  "completed",
-  "skip",
-]);
+/**
+ * T06 ships the stopwatch (PRD §6.2). The pomodoro mode arrives with T08;
+ * sending it earlier is a structured rejection, never a hidden default.
+ */
+export const timerModeSchema = z.enum(["stopwatch"]);
 
-export const sessionStartSchema = z.object({
-  trackId: z.string().uuid(),
-  taskId: z.string().uuid().nullable().optional(),
-  plannedMinutes: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(100_000)
-    .nullable()
-    .optional(),
-  idempotencyKey: z.string().trim().min(1).max(200).optional(),
-});
+const instantSchema = z.string().datetime({ offset: true });
+const nullableUuidSchema = z.string().uuid().nullable().optional();
+const versionSchema = z.coerce.number().int().min(0);
+const idempotencyKey = z.string().trim().min(1).max(200).optional();
+const noteText = z.string().trim().max(20_000).nullable();
+const intentText = z.string().trim().max(2_000).nullable();
 
-export const sessionPauseSchema = z.object({
-  id: z.string().uuid(),
-});
+/**
+ * session_start (PRD §9.2): the execution object must be explicit.
+ * Omitted or null taskId both mean goal-only; attaching a Task requires
+ * its exact id. This deliberately does NOT reuse selection_set's
+ * omitted-means-auto semantics.
+ */
+export const sessionStartSchema = z
+  .object({
+    goalId: z.string().uuid(),
+    taskId: nullableUuidSchema,
+    timerMode: timerModeSchema,
+    intent: intentText.optional(),
+    idempotencyKey,
+  })
+  .strict();
 
-export const sessionResumeSchema = z.object({
-  id: z.string().uuid(),
-});
+export const sessionPauseSchema = z.object({ id: z.string().uuid() });
+export const sessionResumeSchema = z.object({ id: z.string().uuid() });
 
-export const sessionFinishSchema = z.object({
-  id: z.string().uuid(),
-  note: z.string().trim().max(20_000).nullable().optional(),
-  outcome: sessionOutcomeSchema.optional(),
-});
+/** session_finish only ends and saves; task completion is a separate action. */
+export const sessionFinishSchema = z
+  .object({
+    id: z.string().uuid(),
+    note: noteText.optional(),
+    noteExpectedVersion: versionSchema.optional(),
+  })
+  .strict();
 
-export const sessionFinishInputSchema = z.object({
-  note: z.string().trim().max(20_000).nullable().optional(),
-});
+export const sessionCancelSchema = z.object({ id: z.string().uuid() });
 
-export const sessionCancelSchema = z.object({
-  id: z.string().uuid(),
-});
+export const sessionNoteUpdateSchema = z
+  .object({
+    id: z.string().uuid(),
+    note: noteText,
+    expectedVersion: versionSchema,
+  })
+  .strict();
 
-export const sessionNoteUpdateSchema = z.object({
-  id: z.string().uuid(),
-  note: z.string().trim().max(20_000).nullable().optional(),
-});
+export const sessionResumeHintUpdateSchema = z
+  .object({
+    id: z.string().uuid(),
+    resumeHint: noteText,
+    expectedVersion: versionSchema,
+  })
+  .strict();
 
-export const sessionReviewSchema = z.object({
-  sessionId: z.string().uuid(),
-  note: z.string().trim().max(20_000).nullable().optional(),
-  outcome: sessionOutcomeSchema,
-});
-
-export const distractionCreateSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-  text: z.string().trim().max(10_000).nullable().optional(),
-});
+export const distractionCreateSchema = z
+  .object({
+    sessionId: z.string().uuid().optional(),
+    text: z.string().trim().max(10_000).nullable().optional(),
+  })
+  .strict();
 
 export const distractionUpdateSchema = z.object({
   id: z.string().uuid(),
@@ -73,9 +82,7 @@ export const distractionUpdateInputSchema = z.object({
   text: z.string().trim().max(10_000).nullable().optional(),
 });
 
-export const distractionArchiveSchema = z.object({
-  id: z.string().uuid(),
-});
+export const distractionArchiveSchema = z.object({ id: z.string().uuid() });
 
 export const distractionListSchema = z.object({
   sessionId: z.string().uuid().optional(),
@@ -84,18 +91,12 @@ export const distractionListSchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
 });
 
-export const dashboardQuerySchema = z.object({
-  targetDate: z.string().optional(),
-  manualTrackId: z.string().uuid().optional(),
-});
-
-const instantSchema = z.string().datetime({ offset: true });
-const nullableUuidSchema = z.string().uuid().nullable().optional();
+export const dashboardQuerySchema = z.object({}).strict();
 
 export const sessionListSchema = z.object({
   from: instantSchema.optional(),
   to: instantSchema.optional(),
-  trackId: z.string().uuid().optional(),
+  goalId: z.string().uuid().optional(),
   taskId: z.string().uuid().optional(),
   status: sessionStatusSchema.optional(),
   entryMode: z.enum(["timer", "manual"]).optional(),
@@ -105,45 +106,42 @@ export const sessionListSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
-export const sessionLogSchema = z.object({
-  trackId: z.string().uuid(),
-  taskId: nullableUuidSchema,
-  durationSeconds: z.coerce.number().int().positive().max(31_536_000),
-  endedAt: instantSchema.optional(),
-  plannedMinutes: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(100_000)
-    .nullable()
-    .optional(),
-  note: z.string().trim().max(20_000).nullable().optional(),
-  allowOverlap: z.boolean().default(false),
-  idempotencyKey: z.string().trim().min(1).max(200).optional(),
-});
+/** Manual logging (PRD §7.3): Goal + positive duration, everything else optional. */
+export const sessionLogSchema = z
+  .object({
+    goalId: z.string().uuid(),
+    taskId: nullableUuidSchema,
+    durationSeconds: z.coerce.number().int().positive().max(31_536_000),
+    endedAt: instantSchema.optional(),
+    intent: intentText.optional(),
+    note: noteText.optional(),
+    resumeHint: noteText.optional(),
+    allowOverlap: z.boolean().default(false),
+    idempotencyKey,
+  })
+  .strict();
 
-export const sessionUpdateSchema = z.object({
-  id: z.string().uuid(),
-  trackId: z.string().uuid().optional(),
-  taskId: nullableUuidSchema,
-  startedAt: instantSchema.optional(),
-  endedAt: instantSchema.optional(),
-  durationSeconds: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(31_536_000)
-    .optional(),
-  plannedMinutes: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(100_000)
-    .nullable()
-    .optional(),
-  note: z.string().trim().max(20_000).nullable().optional(),
-  allowOverlap: z.boolean().default(false),
-});
+export const sessionUpdateSchema = z
+  .object({
+    id: z.string().uuid(),
+    goalId: z.string().uuid().optional(),
+    taskId: nullableUuidSchema,
+    startedAt: instantSchema.optional(),
+    endedAt: instantSchema.optional(),
+    durationSeconds: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(31_536_000)
+      .optional(),
+    intent: intentText.optional(),
+    note: noteText.optional(),
+    expectedNoteVersion: versionSchema.optional(),
+    resumeHint: noteText.optional(),
+    expectedResumeHintVersion: versionSchema.optional(),
+    allowOverlap: z.boolean().default(false),
+  })
+  .strict();
 
 export const statsQuerySchema = z
   .object({
@@ -162,11 +160,12 @@ export const statsQuerySchema = z
     }
   });
 
-export type SessionOutcome = z.infer<typeof sessionOutcomeSchema>;
 export type SessionStartInput = z.input<typeof sessionStartSchema>;
-export type SessionFinishInput = z.input<typeof sessionFinishInputSchema>;
-export type SessionReviewInput = z.input<typeof sessionReviewSchema>;
+export type SessionFinishInput = z.input<typeof sessionFinishSchema>;
 export type SessionNoteUpdateInput = z.input<typeof sessionNoteUpdateSchema>;
+export type SessionResumeHintUpdateInput = z.input<
+  typeof sessionResumeHintUpdateSchema
+>;
 export type DistractionCreateInput = z.input<typeof distractionCreateSchema>;
 export type DistractionUpdateInput = z.input<
   typeof distractionUpdateInputSchema

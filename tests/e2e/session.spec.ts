@@ -3,234 +3,258 @@ import { expect, test, type Page } from "@playwright/test";
 const webPassword = "correct-horse-battery-staple";
 
 async function loginAndSetup(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("实例密码").fill(webPassword);
-  await page.getByRole("button", { name: "进入 Time OS" }).click();
-  await page.waitForURL(/\/(setup|today)$/);
-  if (page.url().endsWith("/setup")) {
+  await page.goto("/today");
+  if (page.url().includes("/login")) {
+    await page.getByLabel("实例密码").fill(webPassword);
+    await page.getByRole("button", { name: "进入 Time OS" }).click();
+  }
+  // The unconfigured instance streams a loading skeleton on /today while
+  // the app shell redirects to /setup; only trust /today once the
+  // skeleton is gone, otherwise the redirect hasn't happened yet.
+  await expect
+    .poll(
+      async () => {
+        if (
+          (await page.getByRole("button", { name: "完成设置" }).count()) > 0
+        ) {
+          return "setup";
+        }
+        const busy = await page.locator("main[aria-busy='true']").count();
+        if (page.url().includes("/today") && busy === 0) return "today";
+        return "";
+      },
+      { timeout: 20_000, intervals: [250] },
+    )
+    .toMatch(/^(setup|today)$/);
+  if (page.url().includes("/setup")) {
     await page.getByLabel("时区").fill("Asia/Shanghai");
     await page.getByRole("button", { name: "完成设置" }).click();
-    await page.waitForURL(/\/today$/);
+    await expect(page).toHaveURL(/\/today$/, { timeout: 15_000 });
   }
 }
 
+/** Make sure no unfinished Session blocks the next test (PRD §6.1). */
 async function ensureNoActiveSession(page: Page) {
   await page.goto("/today");
-  const returnToFocusBtn = page.getByRole("link", {
-    name: "返回正在进行的专注",
-  });
-  if (
-    (await returnToFocusBtn.count()) > 0 &&
-    (await returnToFocusBtn.first().isVisible())
-  ) {
-    await returnToFocusBtn.first().click();
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
-    await page.getByRole("button", { name: "取消" }).click();
+  const pauseButton = page.getByRole("button", { name: /暂停（Space）/ });
+  if ((await pauseButton.count()) > 0 && (await pauseButton.isVisible())) {
+    await page.getByRole("button", { name: "取消", exact: true }).click();
     await page.getByRole("button", { name: "确定取消" }).click();
-    await page.waitForURL(/\/today$/);
+  }
+  // The page is ready when either the idle panel or the no-goal empty
+  // state is up (fresh runs have no goals yet).
+  await expect(
+    page.getByRole("button", { name: /开始专注|创建目标/ }).first(),
+  ).toBeVisible({ timeout: 10_000 });
+}
+
+async function createGoalWithTasks(page: Page, title: string, tasks: string[]) {
+  await page.goto("/goals");
+  await page.getByText("新建目标", { exact: true }).click();
+  await page.getByLabel("目标名称").fill(title);
+  await page.getByRole("button", { name: "创建目标" }).click();
+  await expect(page.getByText(title)).toBeVisible();
+  const goalCard = page
+    .locator('[data-goal-status="active"]')
+    .filter({ hasText: title });
+  await goalCard.getByLabel(/快速添加任务/).fill(tasks.join("\n"));
+  await goalCard.getByRole("button", { name: "添加", exact: true }).click();
+  for (const task of tasks) {
+    await expect(page.getByText(task)).toBeVisible();
   }
 }
 
-test.describe("Focus execution loop", () => {
-  test("full focus execution loop: start, pause, note autosave, distraction, and atomic finish review", async ({
+test.describe("Goal-direct execution loop", () => {
+  test("goal → task → start → refresh → pause/resume → finish → optional complete → next visit continues", async ({
     page,
   }) => {
     await loginAndSetup(page);
     await ensureNoActiveSession(page);
 
-    // 1. Create a Goal and Track with two tasks
-    await page.goto("/goals");
-    await page.getByText("新建目标", { exact: true }).click();
+    // 1. Create the Goal and its Tasks through the management entry.
+    await createGoalWithTasks(page, "Ship Execution Loop", [
+      "Write the first draft",
+      "Review the second half",
+    ]);
+
+    // 2. Select the goal on the execution home; the first pending Task
+    //    auto-resolves (PRD §5.2).
+    await page.goto("/today");
     await page
-      .getByPlaceholder("例如：发布 Time OS MVP")
-      .fill("Ship Focus Loop");
-    await page.getByRole("button", { name: "创建目标" }).click();
-    await expect(page.getByText("Ship Focus Loop").first()).toBeVisible();
-
-    const goalCard = page
-      .locator('[data-slot="card"]')
-      .filter({ hasText: "Ship Focus Loop" })
-      .first();
-    await goalCard.getByText("＋ 添加推进线", { exact: true }).click();
-    await goalCard.getByLabel("推进线名称").fill("Track Execution");
-    await goalCard.getByRole("button", { name: "创建推进线" }).click();
-    await page.getByRole("link", { name: "Track Execution" }).first().click();
-    await page.waitForURL(/\/tracks\/.+/);
-    const trackId = page.url().split("/").pop()!;
-
-    await page.getByText("批量粘贴", { exact: true }).click();
-    await page.getByPlaceholder(/每行一个任务/).fill("Task Alpha\nTask Beta");
-    await page.getByRole("button", { name: "按行创建" }).click();
-    await expect(page.getByText("Task Alpha").first()).toBeVisible();
-
-    // 2. Open Today for this track
-    await page.goto(`/today?trackId=${trackId}`);
+      .getByLabel("目标", { exact: false })
+      .first()
+      .selectOption({ label: "Ship Execution Loop" });
     await expect(
-      page.getByRole("heading", { name: "Task Alpha" }),
+      page.getByRole("heading", { name: "Write the first draft" }),
     ).toBeVisible();
 
-    // Start Focus CTA
-    const startButton = page.getByRole("button", {
-      name: /开始专注/,
-    });
-    await expect(startButton).toBeVisible();
-    await startButton.click();
+    // 3. One click starts; the big timer appears with the paused-capable
+    //    primary action.
+    await page.getByRole("button", { name: /开始专注/ }).click();
+    const timer = page.getByRole("timer", { name: "已专注时间" });
+    await expect(timer).toBeVisible();
+    await expect(page.getByText("正计时中")).toBeVisible();
 
-    // Navigates to /focus/:id
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
-    await expect(page.getByText("Track Execution").first()).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "Task Alpha" }),
-    ).toBeVisible();
+    // 4. Refresh: the server keeps the Session running (never localStorage).
+    await page.reload();
+    await expect(timer).toBeVisible();
+    await expect(page.getByText("正计时中")).toBeVisible();
 
-    // 3. Pause & Resume
-    const pauseButton = page.getByRole("button", { name: /暂停/ });
-    await expect(pauseButton).toBeVisible();
-    await pauseButton.click();
-    await expect(page.getByRole("button", { name: /继续/ })).toBeVisible();
+    // 5. Pause / resume.
+    await page.getByRole("button", { name: /暂停（Space）/ }).click();
+    await expect(page.getByText("已暂停")).toBeVisible();
+    await page.getByRole("button", { name: /继续（Space）/ }).click();
+    await expect(page.getByText("正计时中")).toBeVisible();
 
-    await page.getByRole("button", { name: /继续/ }).click();
-    await expect(page.getByRole("button", { name: /暂停/ })).toBeVisible();
-
-    // 4. Quick Note autosave & reload recovery
+    // 6. Note autosave survives a reload.
     const noteArea = page.getByPlaceholder(/记录想法/);
     await noteArea.fill("Important thoughts during focus");
     await expect(page.getByText("已保存")).toBeVisible();
-
     await page.reload();
     await expect(noteArea).toHaveValue("Important thoughts during focus");
+    await expect(page.getByText("正计时中")).toBeVisible();
 
-    // 5. Distractions
+    // 7. Distraction quick log.
     const distractionInput = page.getByPlaceholder(/记录打断/);
     await distractionInput.fill("Urgent phone call");
     await page.getByRole("button", { name: "记录" }).click();
     await expect(page.getByText("Urgent phone call")).toBeVisible();
 
-    // 6. Finish Review Modal
-    await page.getByRole("button", { name: /完成/ }).click();
-    await expect(page.getByRole("heading", { name: /专注回顾/ })).toBeVisible();
+    // 8. Finish saves directly — no review form (PRD §6.5).
+    await page.getByRole("button", { name: /结束并保存（F）/ }).click();
+    await expect(page.getByText("专注已保存")).toBeVisible();
+    await expect(page.getByText(/本次投入/)).toBeVisible();
 
-    // Radio for Completed
-    const completedRadio = page.getByRole("radio", { name: /这个任务做完了/ });
-    await expect(completedRadio).toBeChecked();
+    // 9. Optional completion + resume hint are independent actions.
+    await page.getByRole("button", { name: "任务已完成" }).click();
+    await expect(page.getByRole("button", { name: "已完成" })).toBeVisible();
+    await page
+      .getByLabel(/接续提示（下次从这里继续）/)
+      .fill("下次先补第二段例子");
+    await page.getByRole("button", { name: "保存提示" }).click();
+    await expect(page.getByRole("button", { name: "已保存" })).toBeVisible();
 
-    // Submit review
-    await page.getByRole("button", { name: "结束专注" }).click();
-
-    // 7. Verify redirection and advancement
-    await page.waitForURL(/\/today$/);
-    await page.goto(`/today?trackId=${trackId}`);
-    // Task Alpha is finished, Current Next should now be Task Beta!
+    // 10. Back to idle: completing the selected Task advanced the
+    //     selection to the next pending one, atomically (PRD §5.2).
+    await page.getByRole("button", { name: "回到执行" }).click();
+    await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Task Beta" }),
+      page.getByRole("heading", { name: "Review the second half" }),
     ).toBeVisible();
-    await expect(page.getByText("今日已投入")).toBeVisible();
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: "Review the second half" }),
+    ).toBeVisible();
   });
 
-  test("cancelling a focus session allows immediately starting a new session", async ({
+  test("goal-only execution, keyboard shortcuts, and the hint continuing on the next visit", async ({
+    page,
+  }) => {
+    await loginAndSetup(page);
+    await ensureNoActiveSession(page);
+
+    // Switch to explicit goal-only execution.
+    await page.goto("/today");
+    await page.getByLabel("任务").selectOption({ label: "仅围绕目标执行" });
+    await expect(
+      page.getByRole("heading", { name: /围绕目标执行|Ship Execution Loop/ }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: /开始专注/ }).click();
+    await expect(
+      page.getByRole("heading", { name: "围绕目标执行" }),
+    ).toBeVisible();
+
+    // Space pauses without focusing any input first.
+    await page.keyboard.press("Space");
+    await expect(page.getByText("已暂停")).toBeVisible();
+    await page.keyboard.press("Space");
+    await expect(page.getByText("正计时中")).toBeVisible();
+
+    // 让时长真实超过 1 秒：零有效时长不计有效执行，也带不回接续提示。
+    await page.waitForTimeout(1100);
+
+    // Finish; the end card has no Task section for a goal-only run.
+    await page.getByRole("button", { name: /结束并保存（F）/ }).click();
+    await expect(page.getByText("专注已保存")).toBeVisible();
+    await expect(page.getByRole("button", { name: "任务已完成" })).toHaveCount(
+      0,
+    );
+
+    // The hint continues on the next visit (PRD §1 核心验收).
+    await page.getByLabel(/接续提示（下次从这里继续）/).fill("周三先跑五公里");
+    await page.getByRole("button", { name: "保存提示" }).click();
+    await expect(page.getByRole("button", { name: "已保存" })).toBeVisible();
+    await page.getByRole("button", { name: "回到执行" }).click();
+    await expect(page.getByText("周三先跑五公里")).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("周三先跑五公里")).toBeVisible();
+
+    // One click starts the next Session; a mis-start cancels cleanly.
+    await page.getByRole("button", { name: /开始专注/ }).click();
+    await expect(
+      page.getByRole("heading", { name: "围绕目标执行" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await page.getByRole("button", { name: "确定取消" }).click();
+    await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
+  });
+
+  test("a running Session shows the compact banner on other pages", async ({
     page,
   }) => {
     await loginAndSetup(page);
     await ensureNoActiveSession(page);
 
     await page.goto("/today");
-    const startButton = page
-      .getByRole("button", {
-        name: /开始专注|直接开始/,
-      })
-      .first();
-    await startButton.click();
+    await page.getByRole("button", { name: /开始专注/ }).click();
+    await expect(page.getByRole("timer", { name: "已专注时间" })).toBeVisible();
 
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
+    // Other pages show the compact banner, never a second timer.
+    await page.goto("/history");
+    const banner = page.getByRole("region", {
+      name: "进行中的专注提示条",
+    });
+    await expect(banner).toBeVisible();
+    await banner.getByRole("button", { name: /回到执行/ }).click();
+    await expect(page).toHaveURL(/\/today$/);
+    await expect(page.getByRole("timer", { name: "已专注时间" })).toBeVisible();
 
-    // Click Cancel
-    await page.getByRole("button", { name: "取消" }).click();
-    await expect(
-      page.getByRole("heading", { name: "确定取消本次专注吗？" }),
-    ).toBeVisible();
-
+    // Clean up for the next test.
+    await page.getByRole("button", { name: "取消", exact: true }).click();
     await page.getByRole("button", { name: "确定取消" }).click();
-    await page.waitForURL(/\/today$/);
-
-    // Verify we can start again without ACTIVE_SESSION_EXISTS
-    const startAgainButton = page
-      .getByRole("button", {
-        name: /开始专注|直接开始/,
-      })
-      .first();
-    await expect(startAgainButton).toBeVisible();
-    await startAgainButton.click();
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
-
-    // Clean up
-    await page.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "确定取消" }).click();
-    await page.waitForURL(/\/today$/);
+    await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
   });
 
-  test("mobile 375px viewport and global active banner", async ({ page }) => {
+  test("full operation works at 375px and the primary action stays reachable", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     await loginAndSetup(page);
     await ensureNoActiveSession(page);
 
     await page.goto("/today");
-    const startButton = page
-      .getByRole("button", {
-        name: /开始专注|直接开始/,
-      })
-      .first();
-    await startButton.click();
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
+    await page.getByRole("button", { name: /开始专注/ }).click();
+    const timer = page.getByRole("timer", { name: "已专注时间" });
+    await expect(timer).toBeVisible();
 
-    // Navigate to /goals while session is active
-    await page.goto("/goals");
+    // The pause button sits inside the viewport, above the bottom nav.
+    const pause = page.getByRole("button", { name: /暂停（Space）/ });
+    await expect(pause).toBeVisible();
+    const pauseBox = await pause.boundingBox();
+    const nav = page.getByRole("navigation", { name: "主导航" });
+    const navBox = await nav.boundingBox();
+    expect(pauseBox).not.toBeNull();
+    expect(navBox).not.toBeNull();
+    expect(pauseBox!.y + pauseBox!.height).toBeLessThan(navBox!.y);
 
-    // Global active banner should be visible
-    const banner = page.getByRole("region", {
-      name: "进行中的专注提示条",
-    });
-    await expect(banner).toBeVisible();
-    await expect(banner.getByText("返回正在进行的专注")).toBeVisible();
+    await pause.click();
+    await expect(page.getByText("已暂停")).toBeVisible();
+    await page.getByRole("button", { name: /继续（Space）/ }).click();
 
-    // Click Return to focus
-    await banner.getByText("返回正在进行的专注").click();
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
-
-    // Clean up
-    await page.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "确定取消" }).click();
-    await page.waitForURL(/\/today$/);
-  });
-
-  test("overtime does not automatically finish the session", async ({
-    page,
-  }) => {
-    await page.clock.install();
-    await loginAndSetup(page);
-    await ensureNoActiveSession(page);
-
-    await page.goto("/today");
-    const startButton = page
-      .getByRole("button", {
-        name: /开始专注|直接开始/,
-      })
-      .first();
-    await startButton.click();
-    await page.waitForURL(/\/focus\/[0-9a-f-]+/);
-
-    // Advance beyond the largest allowed configured focus duration. Earlier
-    // tests intentionally change the default, so 30 minutes is not enough.
-    await page.clock.fastForward("05:00:00");
-
-    // The session should still be active — verify overtime indicator is shown
-    // and Pause/Finish buttons are still available (not auto-finished)
-    await expect(page.getByText(/已超出计划/)).toBeVisible();
-    await expect(page.getByRole("button", { name: /暂停|继续/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /完成/ })).toBeVisible();
-
-    // Clean up
-    await page.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "确定取消" }).click();
-    await page.waitForURL(/\/today$/);
+    await page.getByRole("button", { name: /结束并保存（F）/ }).click();
+    await expect(page.getByText("专注已保存")).toBeVisible();
+    await page.getByRole("button", { name: "回到执行" }).click();
+    await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
   });
 });

@@ -1,69 +1,63 @@
 import Link from "next/link";
-import { ArrowRight, Plus, RotateCcw } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 
 import {
   createGoalAction,
-  createTrackAction,
-  reorderGoalsAction,
-  reorderTracksAction,
-  updateGoalAction,
-  updateTrackAction,
+  createTasksAction,
 } from "@/app/(app)/planning-actions";
 import { PlanningStatusAction } from "@/components/planning-status-action";
-import { SortableList } from "@/components/sortable-list";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { planningService, sessionService } from "@/services";
-import { goalTrackStatusLabel as statusLabel } from "@/shared/labels";
+import { planningService } from "@/services";
+import type { Goal, Task } from "@/db/schema";
+import { goalStatusLabel, taskStatusLabel } from "@/shared/labels";
 
 const context = { actor: "web" } as const;
 
+/**
+ * Basic Goal / Task management (T06): create a Goal, quick-add Tasks,
+ * complete / skip / archive. The complete three-act onboarding replaces
+ * the creation flow in T07; full management visuals arrive with T10.
+ */
 export default async function GoalsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams?: Promise<{ view?: string }>;
 }) {
-  const { view } = await searchParams;
+  const { view } = (await searchParams) ?? {};
   const showAll = view === "all";
-  const [allGoals, activeSession] = await Promise.all([
-    planningService.listGoals(context, {
-      includeArchived: true,
-      limit: 100,
-    }),
-    sessionService.getActiveSession(context),
+
+  const [allGoals] = await Promise.all([
+    planningService.listGoals(context, { includeArchived: true, limit: 100 }),
   ]);
+
   const visibleGoals = showAll
     ? allGoals.items
     : allGoals.items.filter((goal) => goal.status === "active");
-  // One batched query for every visible goal instead of one query per goal.
-  const tracksByGoal = await planningService.listTracksForGoals(
-    context,
-    visibleGoals.map((goal) => goal.id),
-    { includeArchived: true, limit: 100 },
+
+  // One batched read of every visible goal's tasks.
+  const tasksByGoal = new Map<string, Task[]>();
+  await Promise.all(
+    visibleGoals.map(async (goal: Goal) => {
+      const page = await planningService.listTasks(context, goal.id, {
+        limit: 100,
+      });
+      tasksByGoal.set(goal.id, page.items);
+    }),
   );
-  const goalsWithTracks = visibleGoals.map((goal) => {
-    const allTracks = tracksByGoal.get(goal.id)?.items ?? [];
-    return {
-      goal,
-      allTracks,
-      tracks: showAll
-        ? allTracks
-        : allTracks.filter((track) => track.status === "active"),
-    };
-  });
 
   return (
     <div className="space-y-8">
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div className="space-y-2">
           <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-            计划
+            管理
           </p>
-          <h1 className="text-4xl font-semibold tracking-tight">目标</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">目标与任务</h1>
           <p className="max-w-2xl leading-7 text-stone-600">
-            把方向拆成推进线，再为每条线保留一个明确的下一步。
+            目标下直接放任务；执行都在「执行」页开始。这里是基础管理入口。
           </p>
         </div>
         <Button
@@ -79,7 +73,7 @@ export default async function GoalsPage({
         <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-5 font-medium text-stone-800">
           <span>新建目标</span>
           <span className="text-sm font-normal text-stone-500 group-open:hidden">
-            添加一个长期方向
+            只需要标题
           </span>
           <span className="hidden text-sm font-normal text-stone-500 group-open:inline">
             收起
@@ -92,7 +86,7 @@ export default async function GoalsPage({
               <Input
                 id="new-goal-title"
                 name="title"
-                placeholder="例如：发布 Time OS MVP"
+                placeholder="例如：把产品介绍页改完"
                 required
                 maxLength={240}
               />
@@ -105,360 +99,189 @@ export default async function GoalsPage({
                 placeholder="可选"
               />
             </div>
-            <Button
-              type="submit"
-              className="sm:col-span-2 sm:justify-self-start"
-            >
-              <Plus />
+            <Button type="submit" className="sm:col-span-2 sm:w-auto">
+              <Plus aria-hidden="true" />
               创建目标
             </Button>
           </form>
         </div>
       </details>
 
-      {showAll || visibleGoals.length === allGoals.items.length ? (
-        <SortableList
-          key={goalsWithTracks.map(({ goal }) => goal.id).join(":")}
-          label="拖动调整目标顺序"
-          items={goalsWithTracks.map(({ goal }) => ({
-            id: goal.id,
-            label: goal.title,
-          }))}
-          onReorder={reorderGoalsAction}
-        />
-      ) : (
-        <p className="text-xs text-stone-500">
-          要调整完整目标顺序，请先显示已完成与已归档项目。
-        </p>
-      )}
-
-      {goalsWithTracks.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-stone-300 p-10 text-center text-stone-600">
-          还没有目标。先建立一个值得持续推进的方向。
-        </div>
+      {visibleGoals.length === 0 ? (
+        <Card className="border-dashed border-stone-300 bg-transparent shadow-none">
+          <CardContent className="p-8 text-center text-stone-500">
+            还没有可见的目标。创建一个即可在执行页开始。
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-6">
-          {goalsWithTracks.map(({ goal, tracks, allTracks }) => (
-            <Card
-              key={goal.id}
-              className={
-                goal.status === "active"
-                  ? "bg-white"
-                  : "bg-stone-100/70 text-stone-600"
-              }
-            >
-              <CardHeader className="border-b">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <CardTitle className="text-xl">{goal.title}</CardTitle>
-                      <span className="rounded-full bg-stone-100 px-2 py-0.5 font-mono text-[10px] uppercase">
-                        {statusLabel[goal.status]}
-                      </span>
+          {visibleGoals.map((goal) => {
+            const goalTasks = tasksByGoal.get(goal.id) ?? [];
+            return (
+              <Card
+                key={goal.id}
+                className="border-stone-200 bg-white/90"
+                data-goal-status={goal.status}
+              >
+                <CardContent className="space-y-4 p-5 sm:p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <h2 className="text-xl font-semibold text-stone-900">
+                        {goal.title}
+                      </h2>
+                      <p className="text-xs text-stone-400">
+                        {goalStatusLabel[goal.status]} · {goalTasks.length}{" "}
+                        个任务
+                      </p>
                     </div>
-                    {goal.description && (
-                      <p className="text-stone-600">{goal.description}</p>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    {goal.status === "active" ? (
-                      <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {goal.status === "active" ? (
+                        <>
+                          <PlanningStatusAction
+                            entityType="goal"
+                            id={goal.id}
+                            action="completed"
+                            label="完成目标"
+                            icon="check"
+                            variant="default"
+                          />
+                          <PlanningStatusAction
+                            entityType="goal"
+                            id={goal.id}
+                            action="archived"
+                            label="归档"
+                            icon="archive"
+                            variant="ghost"
+                          />
+                        </>
+                      ) : (
                         <PlanningStatusAction
                           entityType="goal"
-                          entityId={goal.id}
-                          entityTitle={goal.title}
-                          status="completed"
-                          blockingSession={
-                            activeSession?.track.goalId === goal.id
-                              ? {
-                                  id: activeSession.id,
-                                  trackTitle: activeSession.track.title,
-                                  status: activeSession.status as
-                                    "active" | "paused",
-                                }
-                              : null
-                          }
+                          id={goal.id}
+                          action="reactivate"
+                          label="重新启用"
+                          icon="reactivate"
+                          variant="outline"
                         />
-                        <PlanningStatusAction
-                          entityType="goal"
-                          entityId={goal.id}
-                          entityTitle={goal.title}
-                          status="archived"
-                          blockingSession={
-                            activeSession?.track.goalId === goal.id
-                              ? {
-                                  id: activeSession.id,
-                                  trackTitle: activeSession.track.title,
-                                  status: activeSession.status as
-                                    "active" | "paused",
-                                }
-                              : null
-                          }
-                        />
-                      </>
-                    ) : (
-                      <form action={updateGoalAction}>
-                        <input type="hidden" name="id" value={goal.id} />
-                        <input type="hidden" name="status" value="active" />
-                        <Button size="xs" variant="outline" type="submit">
-                          <RotateCcw />
-                          重新启用
-                        </Button>
-                      </form>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-                {goal.status === "active" && (
-                  <details className="mt-3 text-sm">
-                    <summary className="cursor-pointer text-stone-500">
-                      编辑目标
-                    </summary>
+
+                  {goal.description && (
+                    <p className="text-sm text-stone-600">{goal.description}</p>
+                  )}
+
+                  {goal.status === "active" && (
                     <form
-                      action={updateGoalAction}
-                      className="mt-3 grid gap-3 sm:grid-cols-2"
+                      action={createTasksAction}
+                      className="flex items-end gap-2"
                     >
-                      <input type="hidden" name="id" value={goal.id} />
-                      <div className="space-y-2">
-                        <Label htmlFor={`goal-title-${goal.id}`}>
-                          目标名称
+                      <input type="hidden" name="goalId" value={goal.id} />
+                      <div className="flex-1 space-y-1">
+                        <Label
+                          htmlFor={`add-tasks-${goal.id}`}
+                          className="font-mono text-xs text-stone-500"
+                        >
+                          快速添加任务（每行一个）
                         </Label>
-                        <Input
-                          id={`goal-title-${goal.id}`}
-                          name="title"
-                          defaultValue={goal.title}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor={`goal-description-${goal.id}`}>
-                          描述
-                        </Label>
-                        <Input
-                          id={`goal-description-${goal.id}`}
-                          name="description"
-                          defaultValue={goal.description ?? ""}
-                          placeholder="可选"
+                        <textarea
+                          id={`add-tasks-${goal.id}`}
+                          name="titles"
+                          rows={2}
+                          placeholder={"整理素材\n写初稿"}
+                          className="w-full resize-y rounded-lg border border-stone-200 bg-transparent px-2.5 py-1.5 text-sm placeholder:text-stone-400 focus:border-stone-900 focus:outline-hidden"
                         />
                       </div>
                       <Button
-                        className="sm:col-span-2 sm:justify-self-start"
                         type="submit"
+                        size="sm"
                         variant="outline"
+                        className="h-9"
                       >
-                        保存修改
+                        <Plus className="size-3.5" aria-hidden="true" />
+                        添加
                       </Button>
                     </form>
-                  </details>
-                )}
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {goal.status !== "active" ? (
-                  <p className="rounded-xl bg-stone-100 px-3 py-2 text-sm text-stone-600">
-                    这个目标已{goal.status === "completed" ? "完成" : "归档"}
-                    。重新启用后才能调整其中的推进线。
-                  </p>
-                ) : showAll || tracks.length === allTracks.length ? (
-                  <SortableList
-                    key={tracks.map((track) => track.id).join(":")}
-                    label="拖动调整推进线顺序"
-                    items={tracks.map((track) => ({
-                      id: track.id,
-                      label: track.title,
-                    }))}
-                    onReorder={reorderTracksAction.bind(null, goal.id)}
-                  />
-                ) : (
-                  <p className="text-xs text-stone-500">
-                    要调整完整推进线顺序，请先显示已完成与已归档项目。
-                  </p>
-                )}
-                <div className="grid gap-3 md:grid-cols-2">
-                  {tracks.map((track) => (
-                    <div
-                      key={track.id}
-                      className="rounded-xl border border-stone-200 bg-[#faf9f5] p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <Link
-                            href={`/tracks/${track.id}`}
-                            className="font-medium hover:underline"
-                          >
-                            {track.title}
-                          </Link>
-                          <p className="mt-1 font-mono text-xs text-stone-500 uppercase">
-                            {statusLabel[track.status]}
-                          </p>
-                        </div>
-                        <Button
-                          nativeButton={false}
-                          size="xs"
-                          variant="ghost"
-                          render={<Link href={`/tracks/${track.id}`} />}
+                  )}
+
+                  {goalTasks.length > 0 ? (
+                    <ul className="divide-y divide-stone-100 rounded-xl border border-stone-100">
+                      {goalTasks.map((task) => (
+                        <li
+                          key={task.id}
+                          className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-sm"
                         >
-                          打开 <ArrowRight />
-                        </Button>
-                      </div>
-                      {track.description && (
-                        <p className="mt-3 text-sm text-stone-600">
-                          {track.description}
-                        </p>
-                      )}
-                      {goal.status === "active" && (
-                        <details className="mt-3 text-xs text-stone-500">
-                          <summary className="cursor-pointer">
-                            {track.status === "active" ? "编辑与状态" : "状态"}
-                          </summary>
-                          {track.status === "active" && (
-                            <form
-                              action={updateTrackAction}
-                              className="mt-3 grid gap-3 sm:grid-cols-2"
+                          <div className="min-w-0">
+                            <p
+                              className={`truncate font-medium ${
+                                task.status === "pending"
+                                  ? "text-stone-800"
+                                  : "line-clamp-1 text-stone-400"
+                              }`}
                             >
-                              <input type="hidden" name="id" value={track.id} />
-                              <div className="space-y-2">
-                                <Label htmlFor={`track-title-${track.id}`}>
-                                  推进线名称
-                                </Label>
-                                <Input
-                                  id={`track-title-${track.id}`}
-                                  name="title"
-                                  defaultValue={track.title}
-                                  required
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label
-                                  htmlFor={`track-description-${track.id}`}
-                                >
-                                  推进范围
-                                </Label>
-                                <Input
-                                  id={`track-description-${track.id}`}
-                                  name="description"
-                                  defaultValue={track.description ?? ""}
-                                  placeholder="可选"
-                                />
-                              </div>
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                type="submit"
-                                className="sm:col-span-2 sm:justify-self-start"
-                              >
-                                保存
-                              </Button>
-                            </form>
-                          )}
-                          <div className="mt-2 flex gap-2">
-                            {track.status === "active" ? (
+                              {task.title}
+                            </p>
+                            <p className="text-xs text-stone-400">
+                              {taskStatusLabel[task.status]}
+                              {task.estimatedMinutes
+                                ? ` · 预计 ${task.estimatedMinutes} 分钟`
+                                : ""}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {task.status === "pending" ? (
                               <>
                                 <PlanningStatusAction
-                                  entityType="track"
-                                  entityId={track.id}
-                                  entityTitle={track.title}
-                                  status="completed"
-                                  blockingSession={
-                                    activeSession?.trackId === track.id
-                                      ? {
-                                          id: activeSession.id,
-                                          trackTitle: activeSession.track.title,
-                                          status: activeSession.status as
-                                            "active" | "paused",
-                                        }
-                                      : null
-                                  }
+                                  entityType="task"
+                                  id={task.id}
+                                  action="complete"
+                                  label="完成"
+                                  icon="check"
                                 />
                                 <PlanningStatusAction
-                                  entityType="track"
-                                  entityId={track.id}
-                                  entityTitle={track.title}
-                                  status="archived"
-                                  blockingSession={
-                                    activeSession?.trackId === track.id
-                                      ? {
-                                          id: activeSession.id,
-                                          trackTitle: activeSession.track.title,
-                                          status: activeSession.status as
-                                            "active" | "paused",
-                                        }
-                                      : null
-                                  }
+                                  entityType="task"
+                                  id={task.id}
+                                  action="skip"
+                                  label="跳过"
+                                  variant="ghost"
                                 />
                               </>
                             ) : (
-                              <form action={updateTrackAction}>
-                                <input
-                                  type="hidden"
-                                  name="id"
-                                  value={track.id}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="status"
-                                  value="active"
-                                />
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  type="submit"
-                                >
-                                  重新启用
-                                </Button>
-                              </form>
+                              <PlanningStatusAction
+                                entityType="task"
+                                id={task.id}
+                                action="reopen"
+                                label="重新打开"
+                                variant="ghost"
+                              />
                             )}
                           </div>
-                        </details>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                {goal.status === "active" && (
-                  <details className="rounded-xl border border-dashed border-stone-300 bg-stone-50/60">
-                    <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-stone-700">
-                      ＋ 添加推进线
-                    </summary>
-                    <form
-                      action={createTrackAction}
-                      className="grid gap-4 border-t border-stone-200 p-4 sm:grid-cols-2"
-                    >
-                      <input type="hidden" name="goalId" value={goal.id} />
-                      <div className="space-y-2">
-                        <Label htmlFor={`new-track-title-${goal.id}`}>
-                          推进线名称
-                        </Label>
-                        <Input
-                          id={`new-track-title-${goal.id}`}
-                          name="title"
-                          placeholder="例如：打磨 Web 核心流程"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor={`new-track-description-${goal.id}`}>
-                          推进范围
-                        </Label>
-                        <Input
-                          id={`new-track-description-${goal.id}`}
-                          name="description"
-                          placeholder="可选"
-                        />
-                      </div>
-                      <Button
-                        type="submit"
-                        variant="secondary"
-                        className="sm:col-span-2 sm:justify-self-start"
-                      >
-                        <Plus />
-                        创建推进线
-                      </Button>
-                    </form>
-                  </details>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-stone-500">
+                      还没有任务，可以直接围绕目标执行。
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
+
+      <p className="flex items-center gap-2 text-sm text-stone-500">
+        执行从
+        <Link
+          href="/today"
+          className="inline-flex items-center gap-1 font-medium text-stone-900 underline-offset-4 hover:underline"
+        >
+          执行页
+          <ArrowRight className="size-3.5" aria-hidden="true" />
+        </Link>
+        开始。
+      </p>
     </div>
   );
 }

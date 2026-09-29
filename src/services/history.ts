@@ -16,13 +16,14 @@ import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
 import {
   distractions,
+  focusIntervals,
+  goals,
   sessions,
   tasks,
-  tracks,
   type Distraction,
+  type Goal,
   type Session,
   type Task,
-  type Track,
 } from "@/db/schema";
 import { DomainError } from "@/shared/domain-error";
 import {
@@ -40,9 +41,15 @@ import {
   parsed,
   type Transaction,
 } from "@/services/service-kit";
+/**
+ * Goal-direct history (PRD §7.3). Manual logs declare a duration over a
+ * wall-clock range with timeBasis manual; corrections of completed records
+ * switch the basis to corrected while the original observed intervals stay
+ * untouched as the source. Overlaps need explicit allowOverlap.
+ */
 
 export interface HistorySession extends Session {
-  track: Track;
+  goal: Goal;
   task: Task | null;
 }
 
@@ -56,7 +63,7 @@ export interface SessionPage {
 }
 
 export interface SessionTarget {
-  track: Track;
+  goal: Goal;
   tasks: Task[];
 }
 
@@ -102,10 +109,7 @@ export function normalizeManualSession(input: {
 }
 
 export function normalizeSessionCorrection(
-  existing: Pick<
-    Session,
-    "startedAt" | "endedAt" | "durationSeconds" | "totalPausedSeconds"
-  >,
+  existing: Pick<Session, "startedAt" | "endedAt" | "durationSeconds">,
   input: {
     startedAt?: Date;
     endedAt?: Date;
@@ -127,81 +131,73 @@ export function normalizeSessionCorrection(
     );
   }
 
-  const pausedSeconds = existing.totalPausedSeconds;
   let startedAt = input.startedAt ?? existing.startedAt;
   let endedAt = input.endedAt ?? existing.endedAt;
   let durationSeconds = input.durationSeconds ?? existing.durationSeconds;
 
   if (input.startedAt && input.endedAt) {
-    durationSeconds =
-      Math.floor((input.endedAt.getTime() - input.startedAt.getTime()) / 1000) -
-      pausedSeconds;
+    durationSeconds = Math.floor(
+      (input.endedAt.getTime() - input.startedAt.getTime()) / 1000,
+    );
   } else if (input.startedAt && input.durationSeconds !== undefined) {
     endedAt = new Date(
-      input.startedAt.getTime() +
-        (input.durationSeconds + pausedSeconds) * 1000,
+      input.startedAt.getTime() + input.durationSeconds * 1000,
     );
   } else if (input.endedAt && input.durationSeconds !== undefined) {
     startedAt = new Date(
-      input.endedAt.getTime() - (input.durationSeconds + pausedSeconds) * 1000,
+      input.endedAt.getTime() - input.durationSeconds * 1000,
     );
   } else if (input.startedAt) {
-    endedAt = new Date(
-      input.startedAt.getTime() + (durationSeconds + pausedSeconds) * 1000,
-    );
+    endedAt = new Date(startedAt.getTime() + durationSeconds * 1000);
   } else if (input.endedAt) {
-    startedAt = new Date(
-      input.endedAt.getTime() - (durationSeconds + pausedSeconds) * 1000,
-    );
+    startedAt = new Date(endedAt.getTime() - durationSeconds * 1000);
   } else if (input.durationSeconds !== undefined) {
-    startedAt = new Date(
-      endedAt.getTime() - (input.durationSeconds + pausedSeconds) * 1000,
-    );
+    startedAt = new Date(endedAt.getTime() - input.durationSeconds * 1000);
   }
 
   if (endedAt.getTime() <= startedAt.getTime() || durationSeconds <= 0) {
     invalid("Session time range and effective duration must be positive.");
   }
-  if (
-    durationSeconds + pausedSeconds >
-    (endedAt.getTime() - startedAt.getTime()) / 1000
-  ) {
-    invalid("Effective duration and paused time exceed the wall-clock range.");
+  if (durationSeconds > (endedAt.getTime() - startedAt.getTime()) / 1000) {
+    invalid("Effective duration exceeds the wall-clock range.");
   }
 
   return { startedAt, endedAt, durationSeconds };
 }
 
+/**
+ * Ownership validation for manual logs / corrections (PRD §7.3): the Goal
+ * may be non-active and the Task non-pending, but the Task must still
+ * belong to the Goal.
+ */
 async function validateTarget(
   tx: Transaction,
-  trackId: string,
+  goalId: string,
   taskId: string | null,
 ): Promise<void> {
-  const [track] = await tx
-    .select({ id: tracks.id })
-    .from(tracks)
-    .where(eq(tracks.id, trackId))
+  const [goal] = await tx
+    .select({ id: goals.id })
+    .from(goals)
+    .where(eq(goals.id, goalId))
     .limit(1);
-  if (!track) {
-    throw new DomainError("TRACK_NOT_FOUND", "Track was not found.", {
-      trackId,
-    });
+  if (!goal) {
+    throw new DomainError("GOAL_NOT_FOUND", "Goal was not found.", { goalId });
   }
   if (!taskId) return;
 
   const [task] = await tx
-    .select({ trackId: tasks.trackId })
+    .select({ goalId: tasks.goalId })
     .from(tasks)
     .where(eq(tasks.id, taskId))
     .limit(1);
   if (!task) {
     throw new DomainError("TASK_NOT_FOUND", "Task was not found.", { taskId });
   }
-  if (task.trackId !== trackId) {
+  if (task.goalId !== goalId) {
     throw new DomainError(
-      "TASK_NOT_IN_TRACK",
-      "Task does not belong to the selected Track.",
-      { taskId, trackId },
+      "TASK_NOT_IN_GOAL",
+      "Task does not belong to this Goal.",
+      { taskId, goalId },
     );
   }
 }
@@ -220,7 +216,6 @@ async function ensureNoOverlap(
       gt(sessions.endedAt, range.startedAt),
       and(
         inArray(sessions.status, ["active", "paused"] as const),
-        // A running Session's effective wall range extends through the check.
         lt(sessions.startedAt, range.endedAt),
       ),
     )!,
@@ -230,13 +225,13 @@ async function ensureNoOverlap(
   const [conflict] = await tx
     .select({
       id: sessions.id,
-      trackId: tracks.id,
-      trackTitle: tracks.title,
+      goalId: goals.id,
+      goalTitle: goals.title,
       startedAt: sessions.startedAt,
       endedAt: sessions.endedAt,
     })
     .from(sessions)
-    .innerJoin(tracks, eq(sessions.trackId, tracks.id))
+    .innerJoin(goals, eq(sessions.goalId, goals.id))
     .where(and(...conditions))
     .orderBy(asc(sessions.startedAt))
     .limit(1);
@@ -247,8 +242,8 @@ async function ensureNoOverlap(
       "The Session overlaps an existing record. Retry with allowOverlap=true to confirm.",
       {
         sessionId: conflict.id,
-        trackId: conflict.trackId,
-        track: conflict.trackTitle,
+        goalId: conflict.goalId,
+        goal: conflict.goalTitle,
         startedAt: conflict.startedAt.toISOString(),
         endedAt: conflict.endedAt?.toISOString() ?? null,
       },
@@ -269,7 +264,7 @@ export function createHistoryService(database: Database): HistoryService {
       if (!query.includeCancelled)
         conditions.push(ne(sessions.status, "cancelled"));
       if (query.status) conditions.push(eq(sessions.status, query.status));
-      if (query.trackId) conditions.push(eq(sessions.trackId, query.trackId));
+      if (query.goalId) conditions.push(eq(sessions.goalId, query.goalId));
       if (query.taskId) conditions.push(eq(sessions.taskId, query.taskId));
       if (query.entryMode)
         conditions.push(eq(sessions.entryMode, query.entryMode));
@@ -297,9 +292,9 @@ export function createHistoryService(database: Database): HistoryService {
       }
 
       const rows = await database
-        .select({ session: sessions, track: tracks, task: tasks })
+        .select({ session: sessions, goal: goals, task: tasks })
         .from(sessions)
-        .innerJoin(tracks, eq(sessions.trackId, tracks.id))
+        .innerJoin(goals, eq(sessions.goalId, goals.id))
         .leftJoin(tasks, eq(sessions.taskId, tasks.id))
         .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(desc(sessions.startedAt), desc(sessions.id))
@@ -310,7 +305,7 @@ export function createHistoryService(database: Database): HistoryService {
       return {
         items: pageRows.map((row) => ({
           ...row.session,
-          track: row.track,
+          goal: row.goal,
           task: row.task,
         })),
         nextCursor: hasMore ? (pageRows.at(-1)?.session.id ?? null) : null,
@@ -321,9 +316,9 @@ export function createHistoryService(database: Database): HistoryService {
       void _context;
       const [row, distractionRows] = await Promise.all([
         database
-          .select({ session: sessions, track: tracks, task: tasks })
+          .select({ session: sessions, goal: goals, task: tasks })
           .from(sessions)
-          .innerJoin(tracks, eq(sessions.trackId, tracks.id))
+          .innerJoin(goals, eq(sessions.goalId, goals.id))
           .leftJoin(tasks, eq(sessions.taskId, tasks.id))
           .where(eq(sessions.id, id))
           .limit(1),
@@ -341,7 +336,7 @@ export function createHistoryService(database: Database): HistoryService {
       }
       return {
         ...row[0].session,
-        track: row[0].track,
+        goal: row[0].goal,
         task: row[0].task,
         distractions: distractionRows,
       };
@@ -356,12 +351,13 @@ export function createHistoryService(database: Database): HistoryService {
         now: new Date(),
       });
       const requestHash = requestHashOf({
-        trackId: value.trackId,
+        goalId: value.goalId,
         taskId: value.taskId ?? null,
         durationSeconds: value.durationSeconds,
         endedAt: value.endedAt ?? null,
-        plannedMinutes: value.plannedMinutes ?? null,
+        intent: value.intent ?? null,
         note: value.note ?? null,
+        resumeHint: value.resumeHint ?? null,
         allowOverlap: value.allowOverlap,
       });
 
@@ -383,22 +379,24 @@ export function createHistoryService(database: Database): HistoryService {
             return session ?? null;
           },
           run: async () => {
-            await validateTarget(tx, value.trackId, value.taskId ?? null);
+            await validateTarget(tx, value.goalId, value.taskId ?? null);
             await ensureNoOverlap(tx, normalized, value.allowOverlap);
             const [session] = await tx
               .insert(sessions)
               .values({
-                trackId: value.trackId,
+                goalId: value.goalId,
                 taskId: value.taskId ?? null,
                 status: "completed",
                 entryMode: "manual",
                 createdVia: context.actor === "mcp" ? "mcp" : "web",
-                plannedMinutes: value.plannedMinutes ?? null,
+                timerMode: "stopwatch",
+                timeBasis: "manual",
+                intent: value.intent ?? null,
+                note: value.note ?? null,
+                resumeHint: value.resumeHint ?? null,
                 startedAt: normalized.startedAt,
                 endedAt: normalized.endedAt,
                 durationSeconds: normalized.durationSeconds,
-                totalPausedSeconds: 0,
-                note: value.note ?? null,
               })
               .returning();
             return {
@@ -434,30 +432,74 @@ export function createHistoryService(database: Database): HistoryService {
           );
         }
 
-        const trackId = value.trackId ?? existing.trackId;
+        const goalId = value.goalId ?? existing.goalId;
         const taskId =
           value.taskId === undefined ? existing.taskId : value.taskId;
-        await validateTarget(tx, trackId, taskId);
-        const normalized = normalizeSessionCorrection(existing, {
-          startedAt: value.startedAt ? new Date(value.startedAt) : undefined,
-          endedAt: value.endedAt ? new Date(value.endedAt) : undefined,
-          durationSeconds: value.durationSeconds,
-        });
+        await validateTarget(tx, goalId, taskId);
+
+        const timeChanged =
+          value.startedAt !== undefined ||
+          value.endedAt !== undefined ||
+          value.durationSeconds !== undefined;
+        const normalized = timeChanged
+          ? normalizeSessionCorrection(existing, {
+              startedAt: value.startedAt
+                ? new Date(value.startedAt)
+                : undefined,
+              endedAt: value.endedAt ? new Date(value.endedAt) : undefined,
+              durationSeconds: value.durationSeconds,
+            })
+          : {
+              startedAt: existing.startedAt,
+              endedAt: existing.endedAt!,
+              durationSeconds: existing.durationSeconds!,
+            };
         await ensureNoOverlap(tx, normalized, value.allowOverlap, existing.id);
 
+        // Optional version checks: an explicit expectedVersion that no
+        // longer matches is a conflict; omitting it keeps the explicit
+        // correction authoritative (PRD §7.3).
+        for (const [field, expected, current] of [
+          ["note", value.expectedNoteVersion, existing.noteVersion],
+          [
+            "resume hint",
+            value.expectedResumeHintVersion,
+            existing.resumeHintVersion,
+          ],
+        ] as const) {
+          if (expected !== undefined && expected !== current) {
+            throw new DomainError(
+              "VERSION_CONFLICT",
+              `The ${field} changed elsewhere. Reload the latest version and retry.`,
+              { currentVersion: current },
+            );
+          }
+        }
+        const noteChanged =
+          value.note !== undefined && value.note !== existing.note;
+        const hintChanged =
+          value.resumeHint !== undefined &&
+          value.resumeHint !== existing.resumeHint;
+
+        // Text-only edits keep the basis; time edits switch to corrected
+        // while the original observed intervals remain as the source.
         const [updated] = await tx
           .update(sessions)
           .set({
-            trackId,
+            goalId,
             taskId,
             startedAt: normalized.startedAt,
             endedAt: normalized.endedAt,
             durationSeconds: normalized.durationSeconds,
-            plannedMinutes:
-              value.plannedMinutes === undefined
-                ? existing.plannedMinutes
-                : value.plannedMinutes,
-            note: value.note === undefined ? existing.note : value.note,
+            ...(timeChanged ? { timeBasis: "corrected" as const } : {}),
+            intent: value.intent === undefined ? existing.intent : value.intent,
+            note: noteChanged ? value.note : existing.note,
+            ...(noteChanged ? { noteVersion: existing.noteVersion + 1 } : {}),
+            resumeHint: hintChanged ? value.resumeHint : existing.resumeHint,
+            ...(hintChanged
+              ? { resumeHintVersion: existing.resumeHintVersion + 1 }
+              : {}),
+            revision: existing.revision + 1,
             updatedAt: new Date(),
           })
           .where(eq(sessions.id, existing.id))
@@ -468,23 +510,47 @@ export function createHistoryService(database: Database): HistoryService {
 
     async listTargets(_context) {
       void _context;
-      const [trackRows, taskRows] = await Promise.all([
-        database.select().from(tracks).orderBy(asc(tracks.title)),
+      const [goalRows, taskRows] = await Promise.all([
+        database.select().from(goals).orderBy(asc(goals.title)),
         database
           .select()
           .from(tasks)
-          .orderBy(asc(tasks.trackId), asc(tasks.position)),
+          .orderBy(asc(tasks.goalId), asc(tasks.position)),
       ]);
-      const tasksByTrack = new Map<string, Task[]>();
+      const tasksByGoal = new Map<string, Task[]>();
       for (const task of taskRows) {
-        const list = tasksByTrack.get(task.trackId) ?? [];
+        const list = tasksByGoal.get(task.goalId) ?? [];
         list.push(task);
-        tasksByTrack.set(task.trackId, list);
+        tasksByGoal.set(task.goalId, list);
       }
-      return trackRows.map((track) => ({
-        track,
-        tasks: tasksByTrack.get(track.id) ?? [],
+      return goalRows.map((goal) => ({
+        goal,
+        tasks: tasksByGoal.get(goal.id) ?? [],
       }));
     },
   };
+}
+
+/** Used by statistics to fetch interval rows of observed sessions. */
+export async function intervalsOfSessions(
+  database: Database,
+  sessionIds: string[],
+): Promise<Map<string, { startedAt: Date; endedAt: Date | null }[]>> {
+  const map = new Map<string, { startedAt: Date; endedAt: Date | null }[]>();
+  if (sessionIds.length === 0) return map;
+  const rows = await database
+    .select({
+      sessionId: focusIntervals.sessionId,
+      startedAt: focusIntervals.startedAt,
+      endedAt: focusIntervals.endedAt,
+    })
+    .from(focusIntervals)
+    .where(inArray(focusIntervals.sessionId, sessionIds))
+    .orderBy(asc(focusIntervals.startedAt));
+  for (const row of rows) {
+    const list = map.get(row.sessionId) ?? [];
+    list.push({ startedAt: row.startedAt, endedAt: row.endedAt });
+    map.set(row.sessionId, list);
+  }
+  return map;
 }

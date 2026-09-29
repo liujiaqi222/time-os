@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { planningContract } from "@/adapters/planning-contract";
 import { readWebSession } from "@/auth/web-session";
 import { planningService } from "@/services";
-import type { SerializedDomainError } from "@/shared/domain-error";
+import { DomainError } from "@/shared/domain-error";
 
 const context = { actor: "web" } as const;
 
@@ -20,7 +20,6 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
   if (!result.ok)
     throw new Error(`${result.error.code}: ${result.error.message}`);
   revalidatePath("/goals");
-  revalidatePath("/tracks/[id]", "page");
   revalidatePath("/today");
   return result.data;
 }
@@ -28,45 +27,53 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
 export type PlanningStatusState =
   { status: "success" } | { status: "error"; message: string } | undefined;
 
-function statusErrorMessage(error: SerializedDomainError): string {
+function statusErrorMessage(error: { code: string; message: string }): string {
   if (error.code === "PARENT_HAS_ACTIVE_SESSION")
-    return "这个计划中还有正在进行或已暂停的专注。请先完成或取消当前专注。";
-  if (error.code === "GOAL_NOT_FOUND" || error.code === "TRACK_NOT_FOUND")
-    return "这个计划已不存在，刷新页面后再试。";
-  if (error.code === "INVALID_INPUT") return "状态操作无效，请刷新页面后再试。";
+    return "还有未结束的专注关联着它。请先结束或取消这段专注再操作。";
+  if (error.code === "GOAL_NOT_FOUND" || error.code === "TASK_NOT_FOUND")
+    return "它已不存在，刷新页面后再试。";
+  if (error.code === "TASK_NOT_PENDING") return "只有待办任务可以这样操作。";
+  if (error.code === "GOAL_NOT_ACTIVE")
+    return "目标当前不可编辑，请先重新启用。";
+  if (error.code === "INVALID_INPUT") return "操作无效，请刷新页面后再试。";
   return "状态暂时无法更新，请稍后再试。";
 }
 
+/** Goal / Task lifecycle transitions from the management page. */
 export async function updatePlanningStatusAction(
-  _previousState: PlanningStatusState,
+  _previous_state: PlanningStatusState,
   formData: FormData,
 ): Promise<PlanningStatusState> {
   await authorize();
   const entityType = String(formData.get("entityType"));
   const id = String(formData.get("id"));
-  const status = String(formData.get("status")) as "completed" | "archived";
+  const action = String(formData.get("action"));
 
-  const result = await planningContract(() => {
-    if (entityType === "goal")
-      return planningService.updateGoal(context, { id, status });
-    if (entityType === "track")
-      return planningService.updateTrack(context, { id, status });
-    throw new Error("Unknown planning entity type.");
+  const result = await planningContract(async () => {
+    if (entityType === "goal") {
+      if (action === "reactivate")
+        return planningService.updateGoal(context, { id, status: "active" });
+      if (action === "completed" || action === "archived")
+        return planningService.updateGoal(context, { id, status: action });
+    }
+    if (entityType === "task") {
+      if (action === "complete")
+        return planningService.completeTask(context, id);
+      if (action === "skip") return planningService.skipTask(context, id);
+      if (action === "archive") return planningService.archiveTask(context, id);
+      if (action === "reopen") return planningService.reopenTask(context, id);
+    }
+    throw new DomainError("INVALID_INPUT", "Unknown planning action.");
   });
 
   if (!result.ok)
     return { status: "error", message: statusErrorMessage(result.error) };
 
   revalidatePath("/goals");
-  revalidatePath("/tracks/[id]", "page");
   revalidatePath("/today");
+  revalidatePath("/history");
   return { status: "success" };
 }
-
-const optional = (value: FormDataEntryValue | null) => {
-  const text = String(value ?? "").trim();
-  return text || null;
-};
 
 export async function createGoalAction(formData: FormData): Promise<void> {
   await run(() =>
@@ -101,68 +108,17 @@ export async function reorderGoalsAction(ids: string[]): Promise<void> {
   await run(() => planningService.reorderGoals(context, ids));
 }
 
-export async function createTrackAction(formData: FormData): Promise<void> {
-  await run(() =>
-    planningService.createTrack(context, {
-      goalId: String(formData.get("goalId")),
-      title: String(formData.get("title") ?? ""),
-      description: optional(formData.get("description")),
-    }),
-  );
-}
-
-export async function updateTrackAction(formData: FormData): Promise<void> {
-  await run(() =>
-    planningService.updateTrack(context, {
-      id: String(formData.get("id")),
-      ...(formData.has("title")
-        ? { title: String(formData.get("title")) }
-        : {}),
-      ...(formData.has("description")
-        ? { description: optional(formData.get("description")) }
-        : {}),
-      ...(formData.has("status")
-        ? {
-            status: String(formData.get("status")) as
-              "active" | "completed" | "archived",
-          }
-        : {}),
-    }),
-  );
-}
-
-export async function reorderTracksAction(
-  goalId: string,
-  ids: string[],
-): Promise<void> {
-  await run(() => planningService.reorderTracks(context, goalId, ids));
-}
-
 export async function createTasksAction(formData: FormData): Promise<void> {
-  const trackId = String(formData.get("trackId"));
-  const batch = String(formData.get("batch") ?? "")
-    .split(/\r?\n/)
-    .map((title) => title.trim())
-    .filter(Boolean)
-    .map((title) => ({ title }));
-  const title = String(formData.get("title") ?? "").trim();
-  const task = title
-    ? [
-        {
-          title,
-          description: optional(formData.get("description")),
-          estimatedMinutes: optional(formData.get("estimatedMinutes"))
-            ? Number(formData.get("estimatedMinutes"))
-            : null,
-          resourceType: optional(formData.get("resourceType")) as
-            "url" | "text" | null,
-          resourceValue: optional(formData.get("resourceValue")),
-          note: optional(formData.get("note")),
-        },
-      ]
-    : batch;
+  const titles = String(formData.get("titles") ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (titles.length === 0) return;
   await run(() =>
-    planningService.createTasks(context, { trackId, tasks: task }),
+    planningService.createTasks(context, {
+      goalId: String(formData.get("goalId")),
+      tasks: titles.slice(0, 50).map((title) => ({ title })),
+    }),
   );
 }
 
@@ -171,45 +127,18 @@ export async function updateTaskAction(formData: FormData): Promise<void> {
     planningService.updateTask(context, {
       id: String(formData.get("id")),
       title: String(formData.get("title") ?? ""),
-      description: optional(formData.get("description")),
-      estimatedMinutes: optional(formData.get("estimatedMinutes"))
-        ? Number(formData.get("estimatedMinutes"))
-        : null,
-      resourceType: optional(formData.get("resourceType")) as
-        "url" | "text" | null,
-      resourceValue: optional(formData.get("resourceValue")),
-      note: optional(formData.get("note")),
     }),
   );
 }
 
 export async function reorderTasksAction(
-  trackId: string,
+  goalId: string,
   ids: string[],
 ): Promise<void> {
-  await run(() => planningService.reorderTasks(context, trackId, ids));
+  await run(() => planningService.reorderTasks(context, goalId, ids));
 }
 
-export async function transitionTaskAction(formData: FormData): Promise<void> {
-  const id = String(formData.get("id"));
-  const transition = String(formData.get("transition"));
-  await run(() => {
-    if (transition === "complete")
-      return planningService.completeTask(context, id);
-    if (transition === "skip") return planningService.skipTask(context, id);
-    if (transition === "archive")
-      return planningService.archiveTask(context, id);
-    if (transition === "reopen") return planningService.reopenTask(context, id);
-    throw new Error("Unknown task transition.");
-  });
-}
-
-export async function setNextAction(formData: FormData): Promise<void> {
-  await run(() =>
-    planningService.setNext(
-      context,
-      String(formData.get("trackId")),
-      optional(formData.get("taskId")),
-    ),
-  );
-}
+const optional = (value: FormDataEntryValue | null) => {
+  const text = String(value ?? "").trim();
+  return text || null;
+};

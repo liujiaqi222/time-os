@@ -1,85 +1,107 @@
-import type { SessionTimerData } from "@/shared/session-timer";
-import { calculateDurationSecondsOnFinish } from "@/shared/session-timer";
+/**
+ * Focus-time statistics over half-open instant ranges (PRD §7.2).
+ *
+ * - observed Sessions: focus seconds come from the real focus intervals;
+ *   an open interval (active Session) is clipped to `now`.
+ * - manual / corrected Sessions: the declared effective duration is
+ *   apportioned across the queried range by wall-clock overlap — never
+ *   pretending a real pause position was recovered.
+ * - cancelled Sessions contribute nothing anywhere.
+ */
 
-/** Minimal slice of a Session row needed to compute focus time. */
-export interface FocusSessionSlice extends SessionTimerData {
-  trackId: string;
+export interface FocusIntervalSlice {
+  startedAt: Date | string;
   endedAt: Date | string | null;
 }
 
-export interface FocusIntervalTotals {
-  totalFocusSeconds: number;
-  /** Focus seconds attributed to each track within the queried range. */
-  trackFocusSeconds: ReadonlyMap<string, number>;
+export type SessionTimeBasis = "observed" | "manual" | "corrected";
+
+export interface SessionFocusSlice {
+  id: string;
+  goalId: string;
+  status: "active" | "paused" | "completed" | "cancelled";
+  timeBasis: SessionTimeBasis;
+  startedAt: Date | string;
+  endedAt: Date | string | null;
+  durationSeconds: number | null;
+  intervals: readonly FocusIntervalSlice[];
 }
 
-/**
- * Focus seconds contributed by one Session to a half-open instant interval.
- *
- * The schema stores aggregate pause time rather than every historical pause
- * interval. When only part of such a Session intersects the query, its stored
- * effective duration is therefore apportioned by real wall-clock overlap.
- * This keeps totals additive across midnight and DST boundaries.
- */
+export interface FocusTotals {
+  totalFocusSeconds: number;
+  /** Focus seconds attributed to each Goal within the queried range. */
+  goalFocusSeconds: ReadonlyMap<string, number>;
+}
+
+function overlapSeconds(
+  startMs: number,
+  endMs: number,
+  range: { start: Date; end: Date },
+): number {
+  const from = Math.max(startMs, range.start.getTime());
+  const to = Math.min(endMs, range.end.getTime());
+  return to > from ? to - from : 0;
+}
+
+function apportionedSeconds(
+  session: SessionFocusSlice,
+  range: { start: Date; end: Date },
+): number {
+  const startMs = new Date(session.startedAt).getTime();
+  const endMs = session.endedAt ? new Date(session.endedAt).getTime() : null;
+  const duration = session.durationSeconds ?? 0;
+  if (endMs === null || endMs <= startMs || duration <= 0) return 0;
+
+  const overlap = overlapSeconds(startMs, endMs, range);
+  if (overlap <= 0) return 0;
+  const wall = endMs - startMs;
+  return Math.max(
+    0,
+    Math.min(duration, Math.round((duration * overlap) / wall)),
+  );
+}
+
+/** Focus seconds contributed by one Session to a half-open range. */
 export function focusSecondsInRange(
-  session: FocusSessionSlice,
+  session: SessionFocusSlice,
   range: { start: Date; end: Date },
   now: Date,
 ): number {
   if (session.status === "cancelled") return 0;
 
-  const sessionStartMs = new Date(session.startedAt).getTime();
-  let sessionEndMs: number;
-  let effectiveSeconds: number;
-
-  if (session.status === "completed") {
-    if (session.durationSeconds == null || !session.endedAt) return 0;
-    sessionEndMs = new Date(session.endedAt).getTime();
-    effectiveSeconds = session.durationSeconds;
-  } else if (session.status === "active" || session.status === "paused") {
-    sessionEndMs =
-      session.status === "paused" && session.pausedAt
-        ? new Date(session.pausedAt).getTime()
-        : now.getTime();
-    effectiveSeconds = calculateDurationSecondsOnFinish(session, now);
-  } else {
-    return 0;
+  if (session.timeBasis === "observed" && session.intervals.length > 0) {
+    let totalMs = 0;
+    for (const interval of session.intervals) {
+      const startMs = new Date(interval.startedAt).getTime();
+      const endMs = new Date(interval.endedAt ?? now).getTime();
+      if (endMs <= startMs) continue;
+      totalMs += overlapSeconds(startMs, endMs, range);
+    }
+    return Math.floor(totalMs / 1000);
   }
 
-  const wallMs = sessionEndMs - sessionStartMs;
-  if (wallMs <= 0 || effectiveSeconds <= 0) return 0;
-
-  const overlapMs =
-    Math.min(sessionEndMs, range.end.getTime()) -
-    Math.max(sessionStartMs, range.start.getTime());
-  if (overlapMs <= 0) return 0;
-
-  return Math.max(
-    0,
-    Math.min(
-      effectiveSeconds,
-      Math.round(effectiveSeconds * (overlapMs / wallMs)),
-    ),
-  );
+  // Manual / corrected (and defensive fallback for interval-less
+  // observed rows): apportion the declared duration by wall overlap.
+  return apportionedSeconds(session, range);
 }
 
 /** Aggregate Session focus in [range.start, range.end). */
-export function computeFocusIntervals(
-  sessions: readonly FocusSessionSlice[],
+export function computeFocusTotals(
+  sessions: readonly SessionFocusSlice[],
   range: { start: Date; end: Date },
   now: Date,
-): FocusIntervalTotals {
+): FocusTotals {
   let totalFocusSeconds = 0;
-  const trackFocusSeconds = new Map<string, number>();
+  const goalFocusSeconds = new Map<string, number>();
 
   for (const session of sessions) {
     const seconds = focusSecondsInRange(session, range, now);
     totalFocusSeconds += seconds;
-    trackFocusSeconds.set(
-      session.trackId,
-      (trackFocusSeconds.get(session.trackId) ?? 0) + seconds,
+    goalFocusSeconds.set(
+      session.goalId,
+      (goalFocusSeconds.get(session.goalId) ?? 0) + seconds,
     );
   }
 
-  return { totalFocusSeconds, trackFocusSeconds };
+  return { totalFocusSeconds, goalFocusSeconds };
 }
