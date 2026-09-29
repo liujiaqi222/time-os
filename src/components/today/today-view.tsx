@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { Clock3, Flame, Plus, Target } from "lucide-react";
 
 import {
   cancelSessionAction,
@@ -31,8 +31,10 @@ import { formatHumanDuration } from "@/shared/session-timer";
  */
 export function TodayView({
   initialDashboard,
+  initialHeadline,
 }: {
   initialDashboard: DashboardData;
+  initialHeadline: string;
 }) {
   const [dashboard, setDashboard] = useState(initialDashboard);
   const [busy, setBusy] = useState<RunBusyAction>("none");
@@ -42,6 +44,7 @@ export function TodayView({
     durationSeconds: number | null;
   } | null>(null);
   const [endCard, setEndCard] = useState<SessionView | null>(null);
+  const [completionMoment, setCompletionMoment] = useState(0);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [newGoalTitle, setNewGoalTitle] = useState("");
   const [busyGoal, setBusyGoal] = useState(false);
@@ -50,12 +53,22 @@ export function TodayView({
   const runningIdRef = useRef<string | null>(
     initialDashboard.activeSession?.id ?? null,
   );
+  // The portion of today's total already represented by the dashboard read.
+  // Timer actions return authoritative durations, so success can update the
+  // summary locally instead of blocking on another full dashboard request.
+  const dashboardSessionSecondsRef = useRef(
+    initialDashboard.activeSession?.focusSeconds ?? 0,
+  );
   // Set when THIS page ends/cancels so the cross-end detector stays quiet.
   const selfEndRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const result = await getDashboardAction();
-    if (result.ok) setDashboard(result.data);
+    if (result.ok) {
+      dashboardSessionSecondsRef.current =
+        result.data.activeSession?.focusSeconds ?? 0;
+      setDashboard(result.data);
+    }
     return result.ok ? result.data : null;
   }, []);
 
@@ -117,7 +130,13 @@ export function TodayView({
       intent: input.intent,
     });
     if (result.ok) {
-      await refresh();
+      dashboardSessionSecondsRef.current = 0;
+      setDashboard((prev) => ({
+        ...prev,
+        serverNow: result.data.serverNow,
+        activeSession: result.data,
+        resumeHint: null,
+      }));
     } else if (result.error.code === "ACTIVE_SESSION_EXISTS") {
       await refresh();
       setActionError("另一处已经开始了一段专注，已为你定位到当前记录。");
@@ -148,8 +167,25 @@ export function TodayView({
     if (result.ok) {
       selfEndRef.current = true;
       runningIdRef.current = null;
+      const knownSeconds = dashboardSessionSecondsRef.current;
+      const finalSeconds = result.data.durationSeconds ?? 0;
+      dashboardSessionSecondsRef.current = 0;
       setEndCard(result.data);
-      await refresh();
+      setCompletionMoment((moment) => moment + 1);
+      setDashboard((prev) => ({
+        ...prev,
+        serverNow: result.data.serverNow,
+        activeSession: null,
+        todayStats: {
+          ...prev.todayStats,
+          totalFocusSeconds:
+            prev.todayStats.totalFocusSeconds +
+            Math.max(0, finalSeconds - knownSeconds),
+          sessionCount:
+            prev.todayStats.sessionCount +
+            (knownSeconds === 0 && finalSeconds > 0 ? 1 : 0),
+        },
+      }));
     } else {
       // Kept the current info and the retry entry (PRD §6.5); if it ended
       // elsewhere, the notice below explains what actually happened.
@@ -169,7 +205,24 @@ export function TodayView({
       selfEndRef.current = true;
       runningIdRef.current = null;
       setCancelOpen(false);
-      await refresh();
+      const knownSeconds = dashboardSessionSecondsRef.current;
+      dashboardSessionSecondsRef.current = 0;
+      setDashboard((prev) => ({
+        ...prev,
+        serverNow: result.data.serverNow,
+        activeSession: null,
+        todayStats: {
+          ...prev.todayStats,
+          totalFocusSeconds: Math.max(
+            0,
+            prev.todayStats.totalFocusSeconds - knownSeconds,
+          ),
+          sessionCount: Math.max(
+            0,
+            prev.todayStats.sessionCount - (knownSeconds > 0 ? 1 : 0),
+          ),
+        },
+      }));
     } else {
       await refresh();
       setActionError("取消失败，请重试。");
@@ -216,6 +269,10 @@ export function TodayView({
             }
           : prev,
       );
+      setDashboard((prev) => ({
+        ...prev,
+        resumeHint: result.data.resumeHint,
+      }));
       return { ok: true };
     }
     return {
@@ -252,17 +309,31 @@ export function TodayView({
   const { activeSession, selection, goals, todayStats } = dashboard;
 
   return (
-    <div className="mx-auto w-full max-w-xl space-y-6 pb-4">
-      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <p className="text-sm text-stone-500">
-          今日已投入 {formatHumanDuration(todayStats.totalFocusSeconds)} ·{" "}
-          {todayStats.sessionCount} 次执行
-        </p>
-        {activeSession && (
-          <p className="text-xs text-stone-400">
-            Space 暂停 / 继续 · F 结束 · D 打断
+    <div className="mx-auto w-full max-w-4xl space-y-5 pb-6">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold tracking-[0.2em] text-[#b54b35] uppercase">
+            Today
           </p>
-        )}
+          <h1 className="mt-1 text-2xl font-semibold tracking-[-0.035em] text-stone-950 sm:text-3xl">
+            {initialHeadline}
+          </h1>
+        </div>
+        <div className="flex gap-2">
+          <StatChip
+            icon={<Clock3 aria-hidden="true" />}
+            label="今日投入"
+            value={formatHumanDuration(todayStats.totalFocusSeconds)}
+          />
+          <StatChip
+            key={`focus-${completionMoment}`}
+            icon={<Flame aria-hidden="true" />}
+            label="专注"
+            value={`${todayStats.sessionCount} 次`}
+            highlighted={todayStats.sessionCount > 0}
+            celebrating={completionMoment > 0}
+          />
+        </div>
       </header>
 
       {remoteNotice && (
@@ -298,73 +369,84 @@ export function TodayView({
         </div>
       )}
 
-      {endCard ? (
-        <EndCard
-          session={endCard}
-          task={endCard.task}
-          onCompleteTask={completeFromEndCard}
-          onSaveHint={saveHintFromEndCard}
-          onReloadHintVersion={reloadHintVersion}
-          onClose={() => {
-            setEndCard(null);
-            void refresh();
-          }}
-        />
-      ) : activeSession ? (
-        <RunPanel
-          key={activeSession.id}
-          session={activeSession}
-          busy={busy}
-          cancelOpen={cancelOpen}
-          onSessionUpdated={handleSessionUpdated}
-          onSessionLost={handleSessionLost}
-          onFinishRequested={(payload) => void handleFinish(payload)}
-          onOpenCancel={() => setCancelOpen(true)}
-        />
-      ) : selection ? (
-        <IdlePanel
-          dashboard={dashboard}
-          busy={busy === "start" ? "start" : "none"}
-          onStart={(input) => void handleStart(input)}
-          onRefresh={refresh}
-          onError={setActionError}
-        />
-      ) : (
-        <div className="flex flex-col items-start gap-5 pt-8">
-          <div className="space-y-2">
-            <h2 className="text-2xl font-medium tracking-tight">
-              {goals.length === 0
-                ? "最近，有什么事是你真的想推进的？"
-                : "当前没有可执行的目标"}
-            </h2>
-            <p className="text-sm leading-6 text-stone-500">
-              输入一个目标标题即可开始。目标只在这里创建，一次专注也只需要一次点击。
-            </p>
-          </div>
-          <form
-            onSubmit={handleCreateFirstGoal}
-            className="flex w-full flex-col gap-2 sm:flex-row"
-          >
-            <Input
-              value={newGoalTitle}
-              onChange={(e) => setNewGoalTitle(e.target.value)}
-              placeholder="例如：把产品介绍页改完"
-              maxLength={240}
-              className="h-11 flex-1 bg-white/70 text-base"
-              aria-label="目标标题"
+      <main className="rounded-3xl border border-stone-200 bg-white p-5 shadow-[0_12px_35px_rgba(28,25,23,0.06)] sm:p-8">
+        <div>
+          {endCard ? (
+            <EndCard
+              session={endCard}
+              task={endCard.task}
+              onCompleteTask={completeFromEndCard}
+              onSaveHint={saveHintFromEndCard}
+              onReloadHintVersion={reloadHintVersion}
+              onClose={(needsRefresh) => {
+                setEndCard(null);
+                // The finish result and hint write have already been applied
+                // locally. Only a completed Task needs a dashboard reread so
+                // selection can advance to the next Task.
+                if (needsRefresh) void refresh();
+              }}
             />
-            <Button
-              type="submit"
-              size="lg"
-              disabled={busyGoal || !newGoalTitle.trim()}
-              className="h-11 gap-1.5 rounded-full px-4"
-            >
-              <Plus className="size-4" aria-hidden="true" />
-              {busyGoal ? "创建中…" : "创建目标"}
-            </Button>
-          </form>
+          ) : activeSession ? (
+            <RunPanel
+              key={activeSession.id}
+              session={activeSession}
+              busy={busy}
+              cancelOpen={cancelOpen}
+              onBusyChange={setBusy}
+              onSessionUpdated={handleSessionUpdated}
+              onSessionLost={handleSessionLost}
+              onFinishRequested={(payload) => void handleFinish(payload)}
+              onOpenCancel={() => setCancelOpen(true)}
+            />
+          ) : selection ? (
+            <IdlePanel
+              dashboard={dashboard}
+              busy={busy === "start" ? "start" : "none"}
+              onStart={(input) => void handleStart(input)}
+              onRefresh={refresh}
+              onError={setActionError}
+            />
+          ) : (
+            <div className="flex flex-col items-start gap-5 py-8 sm:px-6">
+              <div className="space-y-2">
+                <span className="flex size-11 items-center justify-center rounded-2xl bg-[#f7e0d7] text-[#b54b35]">
+                  <Target className="size-5" aria-hidden="true" />
+                </span>
+                <h2 className="pt-3 text-2xl font-semibold tracking-tight">
+                  {goals.length === 0
+                    ? "最近，有什么事是你真的想推进的？"
+                    : "当前没有可执行的目标"}
+                </h2>
+                <p className="text-sm leading-6 text-stone-500">
+                  输入一个目标标题即可开始。目标只在这里创建，一次专注也只需要一次点击。
+                </p>
+              </div>
+              <form
+                onSubmit={handleCreateFirstGoal}
+                className="flex w-full flex-col gap-2 sm:flex-row"
+              >
+                <Input
+                  value={newGoalTitle}
+                  onChange={(e) => setNewGoalTitle(e.target.value)}
+                  placeholder="例如：把产品介绍页改完"
+                  maxLength={240}
+                  className="h-11 flex-1 bg-white/70 text-base"
+                  aria-label="目标标题"
+                />
+                <Button
+                  type="submit"
+                  size="lg"
+                  disabled={busyGoal || !newGoalTitle.trim()}
+                  className="h-11 gap-1.5 rounded-full px-4"
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                  {busyGoal ? "创建中…" : "创建目标"}
+                </Button>
+              </form>
+            </div>
+          )}
         </div>
-      )}
+      </main>
 
       {cancelOpen && activeSession && (
         <ConfirmationDialog
@@ -382,6 +464,63 @@ export function TodayView({
           onConfirm={() => void handleCancel()}
         />
       )}
+    </div>
+  );
+}
+
+function StatChip({
+  icon,
+  label,
+  value,
+  highlighted = false,
+  celebrating = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  highlighted?: boolean;
+  celebrating?: boolean;
+}) {
+  return (
+    <div
+      className={`flex min-w-28 items-center gap-2.5 rounded-xl border px-3 py-2 transition-[border-color,background-color,transform] ${
+        highlighted
+          ? "border-[#e8dec1] bg-[#fffdf8]"
+          : "border-stone-200 bg-white"
+      } ${celebrating ? "focus-stat-celebrate" : ""}`}
+      aria-live={celebrating ? "polite" : undefined}
+    >
+      <span
+        className={`relative flex size-7 items-center justify-center rounded-lg [&_svg]:size-3.5 ${
+          highlighted
+            ? "bg-[#f4e7bd] text-[#8b6416] [&_svg]:fill-current"
+            : "bg-stone-100 text-stone-600"
+        } ${celebrating ? "focus-flame-celebrate" : ""}`}
+      >
+        {celebrating && (
+          <span
+            className="focus-flame-ring pointer-events-none absolute inset-0 rounded-lg border border-[#d9b95f]"
+            aria-hidden="true"
+          />
+        )}
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span
+          className={`block text-[10px] font-medium tracking-wide ${
+            highlighted ? "text-[#8a7957]" : "text-stone-400"
+          }`}
+        >
+          {label}
+        </span>
+        <span
+          className={`block truncate text-xs font-semibold ${
+            highlighted ? "text-stone-950" : "text-stone-800"
+          } ${celebrating ? "focus-count-celebrate" : ""}`}
+        >
+          {value}
+        </span>
+      </span>
     </div>
   );
 }

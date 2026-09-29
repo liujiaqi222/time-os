@@ -80,13 +80,18 @@ test.describe("Goal-direct execution loop", () => {
     // 2. Select the goal on the execution home; the first pending Task
     //    auto-resolves (PRD §5.2).
     await page.goto("/today");
-    await page
-      .getByLabel("目标", { exact: false })
-      .first()
-      .selectOption({ label: "Ship Execution Loop" });
+    await page.getByLabel("目标", { exact: true }).click();
+    await page.getByRole("option", { name: "Ship Execution Loop" }).click();
     await expect(
       page.getByRole("heading", { name: "Write the first draft" }),
     ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "目标任务" })).toBeVisible();
+
+    // Session-only context is deliberately secondary and explicitly separate
+    // from the persistent Task list below it.
+    await expect(page.getByLabel("本次说明")).toHaveCount(0);
+    await page.getByRole("button", { name: "添加本次说明" }).click();
+    await page.getByLabel("本次说明").fill("Only for this focus session");
 
     // 3. One click starts; the big timer appears with the paused-capable
     //    primary action.
@@ -107,36 +112,36 @@ test.describe("Goal-direct execution loop", () => {
     await expect(page.getByText("正计时中")).toBeVisible();
 
     // 6. Note autosave survives a reload.
-    const noteArea = page.getByPlaceholder(/记录想法/);
-    await noteArea.fill("Important thoughts during focus");
-    await expect(page.getByText("已保存")).toBeVisible();
+    const capture = page.getByLabel("快速记录");
+    await capture.fill("Important thoughts during focus");
+    await page.getByRole("button", { name: "记下", exact: true }).click();
+    await expect(page.getByText("想法已保存")).toBeVisible();
     await page.reload();
+    await page.getByRole("button", { name: "随手记", exact: true }).click();
+    const noteArea = page.getByLabel("本次随手记");
     await expect(noteArea).toHaveValue("Important thoughts during focus");
     await expect(page.getByText("正计时中")).toBeVisible();
 
     // 7. Distraction quick log.
-    const distractionInput = page.getByPlaceholder(/记录打断/);
-    await distractionInput.fill("Urgent phone call");
-    await page.getByRole("button", { name: "记录" }).click();
+    await page.getByRole("button", { name: "打断", exact: true }).click();
+    await capture.fill("Urgent phone call");
+    await page.getByRole("button", { name: "记下", exact: true }).click();
     await expect(page.getByText("Urgent phone call")).toBeVisible();
 
     // 8. Finish saves directly — no review form (PRD §6.5).
     await page.getByRole("button", { name: /结束并保存（F）/ }).click();
     await expect(page.getByText("专注已保存")).toBeVisible();
-    await expect(page.getByText(/本次投入/)).toBeVisible();
 
     // 9. Optional completion + resume hint are independent actions.
-    await page.getByRole("button", { name: "任务已完成" }).click();
-    await expect(page.getByRole("button", { name: "已完成" })).toBeVisible();
-    await page
-      .getByLabel(/接续提示（下次从这里继续）/)
-      .fill("下次先补第二段例子");
-    await page.getByRole("button", { name: "保存提示" }).click();
-    await expect(page.getByRole("button", { name: "已保存" })).toBeVisible();
+    await page.getByRole("button", { name: "标记任务完成" }).click();
+    await expect(
+      page.getByRole("button", { name: "任务已完成" }),
+    ).toBeVisible();
+    await page.getByLabel("下次继续的第一步").fill("下次先补第二段例子");
 
     // 10. Back to idle: completing the selected Task advanced the
     //     selection to the next pending one, atomically (PRD §5.2).
-    await page.getByRole("button", { name: "回到执行" }).click();
+    await page.getByRole("button", { name: "保存起点并返回" }).click();
     await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Review the second half" }),
@@ -155,7 +160,8 @@ test.describe("Goal-direct execution loop", () => {
 
     // Switch to explicit goal-only execution.
     await page.goto("/today");
-    await page.getByLabel("任务").selectOption({ label: "仅围绕目标执行" });
+    await page.getByLabel("任务", { exact: true }).click();
+    await page.getByRole("option", { name: "仅围绕目标执行" }).click();
     await expect(
       page.getByRole("heading", { name: /围绕目标执行|Ship Execution Loop/ }),
     ).toBeVisible();
@@ -177,15 +183,13 @@ test.describe("Goal-direct execution loop", () => {
     // Finish; the end card has no Task section for a goal-only run.
     await page.getByRole("button", { name: /结束并保存（F）/ }).click();
     await expect(page.getByText("专注已保存")).toBeVisible();
-    await expect(page.getByRole("button", { name: "任务已完成" })).toHaveCount(
-      0,
-    );
+    await expect(
+      page.getByRole("button", { name: "标记任务完成" }),
+    ).toHaveCount(0);
 
     // The hint continues on the next visit (PRD §1 核心验收).
-    await page.getByLabel(/接续提示（下次从这里继续）/).fill("周三先跑五公里");
-    await page.getByRole("button", { name: "保存提示" }).click();
-    await expect(page.getByRole("button", { name: "已保存" })).toBeVisible();
-    await page.getByRole("button", { name: "回到执行" }).click();
+    await page.getByLabel("下次继续的第一步").fill("周三先跑五公里");
+    await page.getByRole("button", { name: "保存起点并返回" }).click();
     await expect(page.getByText("周三先跑五公里")).toBeVisible();
     await page.reload();
     await expect(page.getByText("周三先跑五公里")).toBeVisible();
@@ -216,7 +220,7 @@ test.describe("Goal-direct execution loop", () => {
       name: "进行中的专注提示条",
     });
     await expect(banner).toBeVisible();
-    await banner.getByRole("button", { name: /回到执行/ }).click();
+    await banner.getByRole("button", { name: /回到今天/ }).click();
     await expect(page).toHaveURL(/\/today$/);
     await expect(page.getByRole("timer", { name: "已专注时间" })).toBeVisible();
 
@@ -254,7 +258,7 @@ test.describe("Goal-direct execution loop", () => {
 
     await page.getByRole("button", { name: /结束并保存（F）/ }).click();
     await expect(page.getByText("专注已保存")).toBeVisible();
-    await page.getByRole("button", { name: "回到执行" }).click();
+    await page.getByRole("button", { name: "回到今天" }).click();
     await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
   });
 });

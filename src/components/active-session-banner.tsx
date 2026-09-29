@@ -106,7 +106,7 @@ export function ActiveSessionBanner({
             className="h-8 gap-1.5 text-xs"
             render={<Link href="/today" />}
           >
-            回到执行
+            回到今天
             <ArrowRight className="size-3.5" aria-hidden="true" />
           </Button>
         </div>

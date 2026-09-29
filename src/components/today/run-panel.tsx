@@ -13,9 +13,11 @@ import {
   updateDistractionAction,
   updateNoteAction,
 } from "@/app/(app)/session-actions";
-import { DistractionPanel } from "@/components/focus/distraction-panel";
+import {
+  FocusCapture,
+  type CaptureMode,
+} from "@/components/focus/focus-capture";
 import { useDistractions } from "@/components/focus/use-distractions";
-import type { Distraction } from "@/db/schema";
 import { FocusClock } from "@/components/today/focus-clock";
 import { useNoteAutosave } from "@/components/today/use-note-autosave";
 import { Button } from "@/components/ui/button";
@@ -41,6 +43,7 @@ export function RunPanel({
   onSessionLost,
   onFinishRequested,
   onOpenCancel,
+  onBusyChange,
 }: {
   session: SessionView;
   busy: RunBusyAction;
@@ -53,10 +56,13 @@ export function RunPanel({
     changed: boolean;
   }) => void;
   onOpenCancel: () => void;
+  onBusyChange: (action: RunBusyAction) => void;
 }) {
   const currentSeconds = useCurrentSeconds();
   const now = currentSeconds === null ? null : new Date(currentSeconds * 1000);
   const isPaused = session.status === "paused";
+  const [captureMode, setCaptureMode] = useState<CaptureMode>("note");
+  const [distractionsReady, setDistractionsReady] = useState(false);
 
   // Authoritative seconds at serverNow, then live-ticked from the client
   // clock — a refresh recalibrates from the server (never localStorage).
@@ -68,7 +74,7 @@ export function RunPanel({
         now ?? new Date(session.serverNow),
       );
 
-  const distractionInputRef = useRef<HTMLInputElement>(null);
+  const captureInputRef = useRef<HTMLInputElement>(null);
 
   const noteAutosave = useNoteAutosave({
     sessionId: session.id,
@@ -89,23 +95,66 @@ export function RunPanel({
     },
   });
 
+  const distractions = useDistractions({
+    initial: [],
+    actions: {
+      create: createDistractionAction,
+      update: updateDistractionAction,
+      archive: archiveDistractionAction,
+    },
+  });
+  const replaceDistractions = distractions.replace;
+
+  // Preload in the background so opening existing records never renders the
+  // note first and the distraction list a beat later.
+  useEffect(() => {
+    let cancelled = false;
+    void listDistractionsAction(session.id).then((result) => {
+      if (cancelled) return;
+      if (result.ok) replaceDistractions(result.data);
+      setDistractionsReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, replaceDistractions]);
+
   const togglePause = async () => {
     if (busy !== "none") return;
-    if (session.status === "active") {
+    const wasActive = session.status === "active";
+    const action = wasActive ? "pause" : "resume";
+    const optimisticNow = new Date();
+    onBusyChange(action);
+
+    // The server remains authoritative, but the local clock can react at the
+    // click boundary instead of waiting for a remote database roundtrip. The
+    // returned view immediately recalibrates this optimistic state.
+    onSessionUpdated({
+      ...session,
+      status: wasActive ? "paused" : "active",
+      serverNow: optimisticNow.toISOString(),
+      focusSeconds: wasActive ? elapsed : session.focusSeconds,
+      revision: session.revision + 1,
+      updatedAt: optimisticNow,
+    });
+
+    if (wasActive) {
       const result = await pauseSessionAction(session.id);
       if (result.ok) onSessionUpdated(result.data);
       else onSessionLost();
-    } else if (session.status === "paused") {
+    } else {
       const result = await resumeSessionAction(session.id);
       if (result.ok) onSessionUpdated(result.data);
       else onSessionLost();
     }
+    onBusyChange("none");
   };
 
   // Space pause/resume, F finish, D distraction — only when not typing
   // and no dialog is open (PRD §8.3).
   const handleFinish = async () => {
     if (busy !== "none") return;
+    onBusyChange("finish");
     const flushed = await noteAutosave.flush();
     onFinishRequested({
       note: flushed.note,
@@ -125,7 +174,8 @@ export function RunPanel({
         void handleFinish();
       } else if (e.key === "d" || e.key === "D") {
         e.preventDefault();
-        distractionInputRef.current?.focus();
+        setCaptureMode("distraction");
+        captureInputRef.current?.focus();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -136,7 +186,9 @@ export function RunPanel({
   return (
     <div>
       <div className="flex flex-col items-center pt-2 text-center">
-        <p className="text-sm text-stone-500">{session.goal.title}</p>
+        <p className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-stone-500">
+          {session.goal.title}
+        </p>
         <h1 className="mt-1 text-3xl font-medium tracking-tight text-balance text-stone-950 sm:text-4xl">
           {session.task?.title ?? "围绕目标执行"}
         </h1>
@@ -153,12 +205,12 @@ export function RunPanel({
           tone={isPaused ? "paused" : "running"}
           className="mt-8 sm:mt-10"
         />
-        <p className="mt-4">
+        <p className="mt-5">
           <span
             className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
               isPaused
                 ? "bg-amber-100 text-amber-900"
-                : "bg-emerald-100 text-emerald-800"
+                : "bg-[#e4f0dc] text-[#3f6b38]"
             }`}
           >
             {isPaused ? "已暂停" : "正计时中"}
@@ -170,7 +222,7 @@ export function RunPanel({
             size="lg"
             disabled={busy !== "none"}
             onClick={togglePause}
-            className="h-12 w-full gap-2 rounded-full bg-stone-950 px-5 text-base text-stone-50 hover:bg-stone-800 sm:w-auto sm:min-w-40"
+            className="h-12 w-full gap-2 rounded-xl bg-[#26231f] px-6 text-base text-stone-50 shadow-sm hover:bg-stone-800 sm:w-auto sm:min-w-40"
           >
             {busy === "pause" || busy === "resume" ? (
               "处理中…"
@@ -191,7 +243,7 @@ export function RunPanel({
             variant="outline"
             disabled={busy !== "none"}
             onClick={handleFinish}
-            className="h-12 w-full gap-2 rounded-full border-stone-300 bg-white/80 px-5 text-base sm:w-auto sm:min-w-40"
+            className="h-12 w-full gap-2 rounded-xl border-stone-300 bg-white px-5 text-base sm:w-auto sm:min-w-40"
           >
             <Square className="size-4" aria-hidden="true" />
             {busy === "finish" ? "结束保存中…" : "结束并保存（F）"}
@@ -201,7 +253,7 @@ export function RunPanel({
             variant="ghost"
             disabled={busy !== "none"}
             onClick={onOpenCancel}
-            className="h-12 w-full gap-2 rounded-full text-sm text-stone-500 hover:text-red-700 sm:w-auto"
+            className="h-12 w-full gap-2 rounded-xl text-sm text-stone-500 hover:text-red-700 sm:w-auto"
           >
             <X className="size-4" aria-hidden="true" />
             取消
@@ -209,114 +261,19 @@ export function RunPanel({
         </div>
       </div>
 
-      <section className="mt-12 space-y-3 border-t border-stone-200/80 pt-8">
-        <div className="flex items-center justify-between">
-          <label
-            htmlFor="focus-note"
-            className="text-sm font-medium text-stone-700"
-          >
-            随手记
-          </label>
-          <span className="text-xs text-stone-400">
-            {noteAutosave.status === "saving" && "保存中…"}
-            {noteAutosave.status === "saved" && "已保存"}
-            {noteAutosave.status === "error" && "保存失败"}
-          </span>
-        </div>
-        <textarea
-          id="focus-note"
-          rows={3}
-          value={noteAutosave.note}
-          onChange={(e) => noteAutosave.setNote(e.target.value)}
-          placeholder="记录想法、进展或下一步（自动保存）…"
-          className="w-full resize-none rounded-2xl border border-stone-200/80 bg-white/70 p-4 text-sm placeholder:text-stone-400 focus:border-stone-400 focus:outline-hidden"
-        />
-        {noteAutosave.status === "conflict" && (
-          <div
-            role="alert"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
-          >
-            <span>笔记在其他端有更新。你的输入已保留。</span>
-            <span className="flex gap-2">
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void noteAutosave.resolveConflict()}
-              >
-                用我的版本保存
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => void noteAutosave.dismissConflict()}
-              >
-                放弃我的修改
-              </Button>
-            </span>
-          </div>
-        )}
-      </section>
-
-      <DistractionSection
+      <FocusCapture
         sessionId={session.id}
-        inputRef={distractionInputRef}
+        mode={captureMode}
+        onModeChange={setCaptureMode}
+        inputRef={captureInputRef}
+        distractions={distractions}
+        distractionsReady={distractionsReady}
+        note={noteAutosave.note}
+        noteStatus={noteAutosave.status}
+        onNoteChange={noteAutosave.setNote}
+        onResolveNoteConflict={noteAutosave.resolveConflict}
+        onDismissNoteConflict={noteAutosave.dismissConflict}
       />
     </div>
-  );
-}
-
-/** Loads existing distractions once, then mounts the live panel. */
-function DistractionSection({
-  sessionId,
-  inputRef,
-}: {
-  sessionId: string;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-}) {
-  const [loaded, setLoaded] = useState<Distraction[] | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void listDistractionsAction(sessionId).then((result) => {
-      if (!cancelled) setLoaded(result.ok ? result.data : []);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
-
-  if (loaded === null) return null;
-  return (
-    <LoadedDistractions
-      sessionId={sessionId}
-      initial={loaded}
-      inputRef={inputRef}
-    />
-  );
-}
-
-function LoadedDistractions({
-  sessionId,
-  initial,
-  inputRef,
-}: {
-  sessionId: string;
-  initial: Distraction[];
-  inputRef: React.RefObject<HTMLInputElement | null>;
-}) {
-  const distractions = useDistractions({
-    initial,
-    actions: {
-      create: createDistractionAction,
-      update: updateDistractionAction,
-      archive: archiveDistractionAction,
-    },
-  });
-  return (
-    <DistractionPanel
-      sessionId={sessionId}
-      distractions={distractions}
-      inputRef={inputRef}
-    />
   );
 }

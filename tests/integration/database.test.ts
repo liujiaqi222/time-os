@@ -35,12 +35,26 @@ if (
 
 const pool = new Pool({ connectionString: databaseUrl, max: 5 });
 const database = drizzle(pool, { schema });
+const transitionQueries: string[] = [];
+const transitionDatabase = drizzle(pool, {
+  schema,
+  logger: {
+    logQuery(query) {
+      transitionQueries.push(query);
+    },
+  },
+});
 const settingsService = createSettingsService(database);
 const planningService = createPlanningService(database);
 const selectionService = createSelectionService(database);
 const distractionService = createDistractionService(database);
 const sessionService = createSessionService(database, {
   distractionService,
+});
+const transitionDistractionService =
+  createDistractionService(transitionDatabase);
+const transitionSessionService = createSessionService(transitionDatabase, {
+  distractionService: transitionDistractionService,
 });
 const historyService = createHistoryService(database);
 const statisticsService = createStatisticsService(database, {
@@ -381,6 +395,28 @@ describe("session service: stopwatch loop, exclusivity, idempotency", () => {
     });
   });
 
+  it("keeps pause and resume to one database roundtrip each", async () => {
+    const { goal } = await createGoalWithTasks("fast transitions", []);
+    const session = await sessionService.startSession(web, {
+      goalId: goal.id,
+      taskId: null,
+      timerMode: "stopwatch",
+    });
+
+    transitionQueries.length = 0;
+    const paused = await transitionSessionService.pauseSession(web, session.id);
+    expect(paused.status).toBe("paused");
+    expect(transitionQueries).toHaveLength(1);
+
+    transitionQueries.length = 0;
+    const resumed = await transitionSessionService.resumeSession(
+      web,
+      session.id,
+    );
+    expect(resumed.status).toBe("active");
+    expect(transitionQueries).toHaveLength(1);
+  });
+
   it("rejects a second start while one is unfinished, from either surface", async () => {
     const { goal } = await createGoalWithTasks("exclusive", []);
     const first = await sessionService.startSession(web, {
@@ -425,8 +461,12 @@ describe("session service: stopwatch loop, exclusivity, idempotency", () => {
       `select status from sessions where goal_id = $1 and status in ('active','paused')`,
       [goal.id],
     );
-    if (fulfilled.length === 0) {
+    if (results[0].status === "rejected") {
+      expect(results[1].status).toBe("fulfilled");
       expect(open.rows).toHaveLength(0);
+      expect(String(results[0].reason.code ?? results[0].reason)).toMatch(
+        /GOAL_NOT_ACTIVE|INVALID/,
+      );
     } else {
       // Start won the race: the archive must have failed with the guard.
       const reason = (results[1] as PromiseRejectedResult).reason;

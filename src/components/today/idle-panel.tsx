@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, Play, Sparkles } from "lucide-react";
+import { Plus, Play, Sparkles } from "lucide-react";
 
 import {
   listTasksAction,
@@ -11,6 +11,14 @@ import {
 import { FocusClock } from "@/components/today/focus-clock";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { Task } from "@/db/schema";
 import type { DashboardData } from "@/services/dashboard";
 import { taskStatusLabel } from "@/shared/labels";
@@ -35,6 +43,7 @@ export function IdlePanel({
 }) {
   const { selection, resumeHint, goals, todos } = dashboard;
   const [intent, setIntent] = useState("");
+  const [showIntent, setShowIntent] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [busyQuickAdd, setBusyQuickAdd] = useState(false);
   // Fetched full pending list for the switcher, tagged with the goal it
@@ -104,20 +113,18 @@ export function IdlePanel({
       ?.pendingTaskCount ?? taskOptions.length;
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-10">
       <div className="flex flex-col items-center pt-2">
         <div className="flex w-full flex-col items-center gap-1 sm:flex-row sm:justify-center sm:gap-2">
           <SwitchSelect
             label="目标"
             value={selection.goal.id}
             onChange={(goalId) => void handleSelectGoal(goalId)}
-          >
-            {goals.map((item) => (
-              <option key={item.goal.id} value={item.goal.id}>
-                {item.goal.title}
-              </option>
-            ))}
-          </SwitchSelect>
+            options={goals.map((item) => ({
+              value: item.goal.id,
+              label: item.goal.title,
+            }))}
+          />
           <span className="hidden text-stone-300 sm:inline" aria-hidden="true">
             ·
           </span>
@@ -127,21 +134,21 @@ export function IdlePanel({
             onChange={(taskId) =>
               void handleSelectTask(selection.goal.id, taskId || null)
             }
-          >
-            <option value="">仅围绕目标执行</option>
-            {taskOptions.map((task) => (
-              <option key={task.id} value={task.id}>
-                {task.title}
-              </option>
-            ))}
-          </SwitchSelect>
+            options={[
+              { value: "", label: "仅围绕目标执行" },
+              ...taskOptions.map((task) => ({
+                value: task.id,
+                label: task.title,
+              })),
+            ]}
+          />
         </div>
 
-        <div className="mt-10 space-y-2 text-center">
+        <div className="mt-9 space-y-2 text-center">
           {!selection.goalOnly && (
             <p className="text-sm text-stone-500">{selection.goal.title}</p>
           )}
-          <h1 className="text-3xl font-medium tracking-tight text-balance text-stone-950 sm:text-4xl">
+          <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-balance text-stone-950 sm:text-5xl sm:leading-tight">
             {selection.task?.title ?? selection.goal.title}
           </h1>
         </div>
@@ -159,67 +166,103 @@ export function IdlePanel({
           </p>
         )}
 
-        <FocusClock
-          value="00:00"
-          aria-hidden="true"
-          className="mt-8 sm:mt-10"
-        />
+        <div className="mt-8 flex items-center justify-center sm:mt-10">
+          <FocusClock value="00:00" aria-hidden="true" />
+        </div>
 
-        <div className="mt-8 flex w-full flex-col items-center gap-4 sm:mt-10">
+        <div className="mt-8 flex w-full flex-col items-center gap-3 sm:mt-10">
           <Button
             size="lg"
             disabled={busy !== "none"}
             onClick={() => onStart({ intent: intent.trim() || null })}
-            className="h-12 w-full max-w-xs gap-2 rounded-full bg-stone-950 px-6 text-base text-stone-50 hover:bg-stone-800"
+            className="h-13 w-full max-w-xs gap-2 rounded-xl bg-[#d85c41] px-6 text-base text-white shadow-sm hover:bg-[#c84f36]"
           >
             <Play className="size-4 fill-current" aria-hidden="true" />
             {busy === "start" ? "开始中…" : "开始专注"}
           </Button>
-          <label className="block w-full max-w-sm">
-            <span className="sr-only">本次意图</span>
-            <Input
-              value={intent}
-              onChange={(e) => setIntent(e.target.value)}
-              placeholder="这次想做什么？可选，不会自动创建任务"
-              className="h-10 rounded-none border-0 border-b border-stone-200 bg-transparent px-1 text-center shadow-none focus-visible:border-stone-400 focus-visible:ring-0"
-            />
-          </label>
+          {showIntent ? (
+            <div className="w-full max-w-sm rounded-xl border border-stone-200 bg-stone-50 p-3 text-left">
+              <div className="flex items-baseline justify-between gap-3">
+                <label
+                  htmlFor="session-intent"
+                  className="text-sm font-medium text-stone-700"
+                >
+                  本次说明
+                </label>
+                <button
+                  type="button"
+                  className="text-xs text-stone-400 hover:text-stone-700"
+                  onClick={() => {
+                    setShowIntent(false);
+                    setIntent("");
+                  }}
+                >
+                  移除
+                </button>
+              </div>
+              <Input
+                id="session-intent"
+                value={intent}
+                onChange={(e) => setIntent(e.target.value)}
+                placeholder="例如：先梳理首页结构"
+                className="mt-2 h-10 border-stone-300 bg-white shadow-none"
+                autoFocus
+              />
+              <p className="mt-2 text-xs leading-5 text-stone-500">
+                只附在这次专注记录里，不会加入下面的目标任务。
+              </p>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="text-stone-500"
+              onClick={() => setShowIntent(true)}
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              添加本次说明
+            </Button>
+          )}
         </div>
       </div>
 
       <section
         aria-labelledby="todos-title"
-        className="space-y-3 border-t border-stone-200/80 pt-8"
+        className="space-y-3 rounded-2xl border border-stone-200 bg-stone-50 p-5 sm:p-6"
       >
-        <div className="flex items-baseline justify-between">
-          <h2 id="todos-title" className="text-sm font-medium text-stone-700">
-            待办
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 id="todos-title" className="text-sm font-semibold text-stone-800">
+            目标任务
           </h2>
           <span className="text-xs text-stone-400">
-            {pendingCount} 个待办任务
+            {pendingCount} 项未完成
           </span>
         </div>
+        <p className="text-xs leading-5 text-stone-500">
+          任务会持续保留。点击一项，即可设为本次专注内容。
+        </p>
         <form onSubmit={handleQuickAddTask} className="flex items-center gap-2">
           <Input
             value={newTaskTitle}
             onChange={(e) => setNewTaskTitle(e.target.value)}
-            placeholder={`快速添加到「${selection.goal.title}」`}
+            placeholder={`给「${selection.goal.title}」添加任务`}
             maxLength={500}
-            className="h-10 bg-white/70 text-sm"
+            className="h-10 bg-white text-sm"
           />
           <Button
             type="submit"
             size="sm"
             variant="outline"
-            className="h-10 bg-white/70"
+            className="h-10 bg-white"
             disabled={busyQuickAdd || !newTaskTitle.trim()}
           >
             <Plus className="size-3.5" aria-hidden="true" />
-            添加
+            创建
           </Button>
         </form>
         {todos.length > 0 ? (
-          <ul className="divide-y divide-stone-200/70 overflow-hidden rounded-2xl border border-stone-200/80 bg-white/70">
+          <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white">
             {todos.map((task) => (
               <li
                 key={task.id}
@@ -245,7 +288,7 @@ export function IdlePanel({
           </ul>
         ) : (
           <p className="px-1 py-3 text-sm text-stone-500">
-            这个目标还没有待办任务，可以直接围绕目标开始。
+            这个目标还没有任务。可以直接围绕目标专注，也可以先创建一项。
           </p>
         )}
       </section>
@@ -257,27 +300,39 @@ function SwitchSelect({
   label,
   value,
   onChange,
-  children,
+  options,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  children: React.ReactNode;
+  options: { value: string; label: string }[];
 }) {
   return (
-    <label className="flex h-9 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-stone-800 transition-colors hover:bg-white/80">
-      <span className="shrink-0 text-xs text-stone-400">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="max-w-44 min-w-0 cursor-pointer appearance-none truncate bg-transparent text-sm font-medium text-stone-900 outline-none"
+    <Select
+      items={options}
+      value={value}
+      onValueChange={(nextValue) => onChange(nextValue ?? "")}
+    >
+      <SelectTrigger
+        aria-label={label}
+        className="h-9 max-w-64 min-w-0 gap-2 border-stone-200 bg-white px-3 text-stone-800 shadow-none hover:border-stone-300"
       >
-        {children}
-      </select>
-      <ChevronDown
-        className="size-3.5 shrink-0 text-stone-400"
-        aria-hidden="true"
-      />
-    </label>
+        <span className="shrink-0 text-xs text-stone-400">{label}</span>
+        <SelectValue className="max-w-44 min-w-0 font-medium text-stone-900" />
+      </SelectTrigger>
+      <SelectContent
+        align="start"
+        alignItemWithTrigger={false}
+        className="max-w-80 border-stone-200 bg-white"
+      >
+        <SelectGroup>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   );
 }

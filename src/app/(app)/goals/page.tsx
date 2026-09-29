@@ -57,7 +57,7 @@ export default async function GoalsPage({
           </p>
           <h1 className="text-4xl font-semibold tracking-tight">目标与任务</h1>
           <p className="max-w-2xl leading-7 text-stone-600">
-            目标下直接放任务；执行都在「执行」页开始。这里是基础管理入口。
+            目标下直接放任务；专注都从「今天」开始。这里是基础管理入口。
           </p>
         </div>
         <Button
@@ -261,7 +261,7 @@ export default async function GoalsPage({
                     </ul>
                   ) : (
                     <p className="text-sm text-stone-500">
-                      还没有任务，可以直接围绕目标执行。
+                      还没有任务，可以直接围绕目标专注。
                     </p>
                   )}
                 </CardContent>
@@ -272,12 +272,12 @@ export default async function GoalsPage({
       )}
 
       <p className="flex items-center gap-2 text-sm text-stone-500">
-        执行从
+        专注从
         <Link
           href="/today"
           className="inline-flex items-center gap-1 font-medium text-stone-900 underline-offset-4 hover:underline"
         >
-          执行页
+          今天
           <ArrowRight className="size-3.5" aria-hidden="true" />
         </Link>
         开始。

@@ -8,13 +8,13 @@ import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 
 /**
- * Main navigation (PRD §5.1 / §8.3): only 执行 and 足迹. Settings lives
+ * Main navigation (PRD §5.1 / §8.3): only 今天 and 足迹. Settings lives
  * behind a gear; the remaining real maintenance pages stay reachable
  * from there.
  */
 
 const links = [
-  { href: "/today", label: "执行", icon: SunMedium },
+  { href: "/today", label: "今天", icon: SunMedium },
   { href: "/history", label: "足迹", icon: Footprints },
 ];
 
@@ -27,7 +27,10 @@ export function PrimaryNav({ variant }: { variant: "desktop" | "mobile" }) {
 
   if (variant === "desktop") {
     return (
-      <nav aria-label="主导航" className="hidden items-center gap-1 sm:flex">
+      <nav
+        aria-label="主导航"
+        className="hidden items-center gap-1 rounded-xl border border-stone-200 bg-white p-1 sm:flex"
+      >
         {links.map(({ href, label, icon: Icon }) => {
           const isCurrent = isCurrentPath(pathname, href);
           return (
@@ -37,8 +40,9 @@ export function PrimaryNav({ variant }: { variant: "desktop" | "mobile" }) {
               size="sm"
               nativeButton={false}
               className={cn(
-                "text-stone-600",
-                isCurrent && "bg-stone-200/70 text-stone-950",
+                "rounded-lg px-3 text-stone-600",
+                isCurrent &&
+                  "bg-[#26231f] text-white shadow-sm hover:bg-stone-800",
               )}
               render={
                 <Link
@@ -59,7 +63,7 @@ export function PrimaryNav({ variant }: { variant: "desktop" | "mobile" }) {
   return (
     <nav
       aria-label="主导航"
-      className="fixed inset-x-3 bottom-3 z-40 grid grid-cols-3 rounded-2xl border border-stone-200/90 bg-[#fffdf8]/95 p-1.5 shadow-[0_10px_35px_rgba(28,25,23,0.16)] backdrop-blur sm:hidden"
+      className="fixed inset-x-3 bottom-3 z-40 grid grid-cols-3 rounded-2xl border border-stone-200 bg-white p-1.5 shadow-[0_10px_30px_rgba(28,25,23,0.12)] sm:hidden"
     >
       {links.map(({ href, label, icon: Icon }) => {
         const isCurrent = isCurrentPath(pathname, href);

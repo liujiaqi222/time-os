@@ -196,7 +196,7 @@ function SessionRow({
                   <dt className="text-stone-500">有效时长</dt>
                   <dd>
                     {duration === null
-                      ? "进行中（在执行页查看实时时间）"
+                      ? "进行中（在今天页查看实时时间）"
                       : durationLabel(duration)}
                   </dd>
                 </div>

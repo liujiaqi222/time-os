@@ -6,7 +6,6 @@ import { goals, sessions, tasks, type Goal, type Task } from "@/db/schema";
 import type { SelectionReason } from "@/shared/selection";
 import type { SessionService, SessionView } from "@/services/session";
 import type { SelectionService } from "@/services/selection";
-import type { SettingsService } from "@/services/settings";
 import type { StatisticsService } from "@/services/statistics";
 
 /**
@@ -89,27 +88,32 @@ export function createDashboardService(
     async getDashboard(context) {
       void context;
       const now = new Date();
-      const [activeSession, resolved, todayStats, activeGoalRows] =
-        await Promise.all([
-          sessionService.getActiveSession(context),
-          selectionService.resolve(context),
-          statisticsService.getStatistics(context, { period: "today" }),
-          database
-            .select({ goal: goals })
-            .from(goals)
-            .where(eq(goals.status, "active"))
-            .orderBy(asc(goals.position)),
-        ]);
+      const [
+        activeSession,
+        resolved,
+        todayStats,
+        activeGoalRows,
+        pendingCounts,
+      ] = await Promise.all([
+        sessionService.getActiveSession(context),
+        selectionService.resolve(context),
+        statisticsService.getStatistics(context, { period: "today" }),
+        database
+          .select({ goal: goals })
+          .from(goals)
+          .where(eq(goals.status, "active"))
+          .orderBy(asc(goals.position)),
+        // Pending Task counts for the switcher, one query for all goals.
+        database
+          .select({
+            goalId: tasks.goalId,
+            count: sql<number>`count(*)`,
+          })
+          .from(tasks)
+          .where(eq(tasks.status, "pending"))
+          .groupBy(tasks.goalId),
+      ]);
 
-      // Pending Task counts for the switcher, one query for all goals.
-      const pendingCounts = await database
-        .select({
-          goalId: tasks.goalId,
-          count: sql<number>`count(*)`,
-        })
-        .from(tasks)
-        .where(and(eq(tasks.status, "pending")))
-        .groupBy(tasks.goalId);
       const pendingByGoal = new Map(
         pendingCounts.map((row) => [row.goalId, Number(row.count)]),
       );
@@ -119,7 +123,7 @@ export function createDashboardService(
       let todos: Task[] = [];
 
       if (resolved) {
-        const [[goal], taskRows] = await Promise.all([
+        const [goalRows, taskRows, pendingTasks, hint] = await Promise.all([
           database
             .select()
             .from(goals)
@@ -132,7 +136,27 @@ export function createDashboardService(
                 .where(eq(tasks.id, resolved.taskId))
                 .limit(1)
             : Promise.resolve([] as Task[]),
+          database
+            .select()
+            .from(tasks)
+            .where(
+              and(
+                eq(tasks.goalId, resolved.goalId),
+                eq(tasks.status, "pending"),
+              ),
+            )
+            .orderBy(asc(tasks.position))
+            .limit(8),
+          activeSession
+            ? Promise.resolve(null)
+            : resolved.taskId
+              ? latestResumeHint(database, { taskId: resolved.taskId })
+              : latestResumeHint(database, {
+                  goalId: resolved.goalId,
+                  goalOnly: true,
+                }),
         ]);
+        const [goal] = goalRows;
         if (goal) {
           const [task] = taskRows;
           selection = {
@@ -141,23 +165,8 @@ export function createDashboardService(
             goalOnly: resolved.taskId === null,
             reason: resolved.reason,
           };
-          todos = await database
-            .select()
-            .from(tasks)
-            .where(and(eq(tasks.goalId, goal.id), eq(tasks.status, "pending")))
-            .orderBy(asc(tasks.position))
-            .limit(8);
-
-          // Hint only matters for the idle "continue next time" state;
-          // while a Session runs, its intent is displayed instead.
-          if (!activeSession) {
-            resumeHint = resolved.taskId
-              ? await latestResumeHint(database, { taskId: resolved.taskId })
-              : await latestResumeHint(database, {
-                  goalId: goal.id,
-                  goalOnly: true,
-                });
-          }
+          todos = pendingTasks;
+          resumeHint = hint;
         }
       }
 

@@ -147,71 +147,80 @@ export async function advanceSelectionOnTaskTransition(
 
 export function createSelectionService(database: Database): SelectionService {
   async function resolveFromDb(): Promise<ResolvedSelection | null> {
-    const [openRow] = await database
-      .select({ goalId: sessions.goalId, taskId: sessions.taskId })
-      .from(sessions)
-      .where(inArray(sessions.status, ["active", "paused"] as const))
-      .limit(1);
+    // Resolve the independent roots together. Remote Postgres latency is much
+    // larger than the work in these small reads, so serial roundtrips made the
+    // execution dashboard take several seconds even on a warm connection.
+    const [openRows, stored, recentRows, firstGoalRows] = await Promise.all([
+      database
+        .select({ goalId: sessions.goalId, taskId: sessions.taskId })
+        .from(sessions)
+        .where(inArray(sessions.status, ["active", "paused"] as const))
+        .limit(1),
+      readStoredSelection(database),
+      database
+        .select({ goalId: sessions.goalId, taskId: sessions.taskId })
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.status, "completed"),
+            isNotNull(sessions.endedAt),
+            sql`${sessions.durationSeconds} > 0`,
+          ),
+        )
+        .orderBy(desc(sessions.endedAt), desc(sessions.startedAt))
+        .limit(1),
+      database
+        .select({ id: goals.id })
+        .from(goals)
+        .where(eq(goals.status, "active"))
+        .orderBy(asc(goals.position))
+        .limit(1),
+    ]);
 
-    const stored = await readStoredSelection(database);
-    const [storedGoal, storedCandidates, storedTask] = stored
-      ? await Promise.all([
-          database
+    const openRow = openRows[0];
+    const recentRow = recentRows[0];
+    const firstGoalRow = firstGoalRows[0];
+
+    const [
+      storedGoal,
+      storedCandidates,
+      storedTask,
+      recentGoal,
+      recentCandidates,
+      firstGoalCandidates,
+    ] = await Promise.all([
+      stored
+        ? database
             .select({ status: goals.status })
             .from(goals)
             .where(eq(goals.id, stored.goalId))
-            .limit(1),
-          pendingCandidates(database, stored.goalId),
-          stored.taskId
-            ? database
-                .select({ position: tasks.position })
-                .from(tasks)
-                .where(eq(tasks.id, stored.taskId))
-                .limit(1)
-            : Promise.resolve([null]),
-        ])
-      : [null, [], null];
-    const storedTaskPending = Boolean(
-      stored?.taskId && storedCandidates.some((c) => c.id === stored.taskId),
-    );
-
-    // Most recent effective (non-cancelled, > 0s) execution.
-    const [recentRow] = await database
-      .select({
-        goalId: sessions.goalId,
-        taskId: sessions.taskId,
-      })
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.status, "completed"),
-          isNotNull(sessions.endedAt),
-          sql`${sessions.durationSeconds} > 0`,
-        ),
-      )
-      .orderBy(desc(sessions.endedAt), desc(sessions.startedAt))
-      .limit(1);
-
-    const [recentGoal, recentCandidates] = recentRow
-      ? await Promise.all([
-          database
+            .limit(1)
+        : Promise.resolve([]),
+      stored ? pendingCandidates(database, stored.goalId) : Promise.resolve([]),
+      stored?.taskId
+        ? database
+            .select({ position: tasks.position })
+            .from(tasks)
+            .where(eq(tasks.id, stored.taskId))
+            .limit(1)
+        : Promise.resolve([]),
+      recentRow
+        ? database
             .select({ status: goals.status })
             .from(goals)
             .where(eq(goals.id, recentRow.goalId))
-            .limit(1),
-          pendingCandidates(database, recentRow.goalId),
-        ])
-      : [null, []];
-
-    const [firstGoalRow] = await database
-      .select({ id: goals.id })
-      .from(goals)
-      .where(eq(goals.status, "active"))
-      .orderBy(asc(goals.position))
-      .limit(1);
-    const firstGoalCandidates = firstGoalRow
-      ? await pendingCandidates(database, firstGoalRow.id)
-      : [];
+            .limit(1)
+        : Promise.resolve([]),
+      recentRow
+        ? pendingCandidates(database, recentRow.goalId)
+        : Promise.resolve([]),
+      firstGoalRow
+        ? pendingCandidates(database, firstGoalRow.id)
+        : Promise.resolve([]),
+    ]);
+    const storedTaskPending = Boolean(
+      stored?.taskId && storedCandidates.some((c) => c.id === stored.taskId),
+    );
 
     return resolveExecutionTarget({
       openSession: openRow

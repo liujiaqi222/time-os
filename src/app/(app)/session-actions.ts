@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { sessionContract } from "@/adapters/session-contract";
@@ -29,17 +28,13 @@ async function authorize(): Promise<void> {
   if (!(await readWebSession())) redirect("/login");
 }
 
-function refreshPages(): void {
-  revalidatePath("/today");
-  revalidatePath("/history");
-  revalidatePath("/goals");
-}
-
 async function run<T>(work: () => Promise<T>): Promise<Result<T>> {
   await authorize();
-  const result = await sessionContract(work);
-  if (result.ok) refreshPages();
-  return result;
+  // These authenticated routes are force-dynamic. The client already applies
+  // each mutation's returned value, so revalidating here would make Next.js
+  // render the current layout and page before returning the action result.
+  // That turns a small timer mutation into a full dashboard roundtrip.
+  return sessionContract(work);
 }
 
 // ---- Dashboard / selection -----------------------------------------------
