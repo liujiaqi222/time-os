@@ -6,11 +6,11 @@ import {
   settingsGetContract,
   settingsUpdateContract,
 } from "@/adapters/settings-contract";
-import { planningContract } from "@/adapters/planning-contract";
 import { sessionContract } from "@/adapters/session-contract";
 import type { DashboardService } from "@/services/dashboard";
 import type { DistractionService } from "@/services/distraction";
 import type { PlanningService } from "@/services/planning";
+import type { SelectionService } from "@/services/selection";
 import type { SessionService } from "@/services/session";
 import type { SettingsService } from "@/services/settings";
 import type { HistoryService } from "@/services/history";
@@ -21,16 +21,20 @@ import {
   listSchema,
   taskUpdateSchema,
   tasksCreateSchema,
-  trackCreateSchema,
-  trackUpdateSchema,
 } from "@/shared/schemas/planning";
 import {
+  dashboardQuerySchema,
   distractionCreateSchema,
   distractionListSchema,
   distractionUpdateSchema,
+  sessionCancelSchema,
   sessionFinishSchema,
   sessionListSchema,
   sessionLogSchema,
+  sessionNoteUpdateSchema,
+  sessionPauseSchema,
+  sessionResumeHintUpdateSchema,
+  sessionResumeSchema,
   sessionStartSchema,
   sessionUpdateSchema,
   statsQuerySchema,
@@ -47,9 +51,16 @@ function toolResult(result: object, error?: string) {
   };
 }
 
+/**
+ * The v3 MCP surface (PRD §9.2). Web and MCP call the same domain
+ * services; every tool maps a domain error into a structured result.
+ * Track / Current-Next registrations are gone — Goal, Task and Session
+ * hang off each other directly.
+ */
 export function createTimeOsMcpServer(deps: {
   settingsService: SettingsService;
   planningService: PlanningService;
+  selectionService: SelectionService;
   sessionService: SessionService;
   distractionService: DistractionService;
   dashboardService: DashboardService;
@@ -59,13 +70,14 @@ export function createTimeOsMcpServer(deps: {
   const {
     settingsService,
     planningService,
+    selectionService,
     sessionService,
     distractionService,
     dashboardService,
     historyService,
     statisticsService,
   } = deps;
-  const server = new McpServer({ name: "time-os", version: "0.1.0" });
+  const server = new McpServer({ name: "time-os", version: "0.3.0" });
 
   server.registerTool(
     "system_health",
@@ -73,7 +85,7 @@ export function createTimeOsMcpServer(deps: {
       title: "Time OS health",
       description:
         "Check that the authenticated Time OS endpoint and database schema are ready.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({}).strict(),
     },
     async () => {
       try {
@@ -99,8 +111,8 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "Get settings",
       description:
-        "Read Time OS timezone, default focus duration, and week start.",
-      inputSchema: z.object({}),
+        "Read Time OS timezone, week start, and preferred timer mode.",
+      inputSchema: z.object({}).strict(),
     },
     async () => {
       const result = await settingsGetContract(settingsService, context);
@@ -115,8 +127,7 @@ export function createTimeOsMcpServer(deps: {
     "settings_update",
     {
       title: "Update settings",
-      description:
-        "Update Time OS timezone, default focus duration, and week start.",
+      description: "Update Time OS timezone and week start.",
       inputSchema: updateSettingsSchema,
     },
     async (input) => {
@@ -132,219 +143,9 @@ export function createTimeOsMcpServer(deps: {
     },
   );
 
-  const planningTool = <T extends object>(
-    name: string,
-    options: {
-      title: string;
-      description: string;
-      inputSchema: z.ZodType;
-    },
-    operation: (input: T) => Promise<unknown>,
-  ) => {
-    server.registerTool(name, options, async (input) => {
-      const result = await planningContract(() => operation(input as T));
-      return toolResult(
-        result,
-        result.ok ? undefined : errorMessage(result.error),
-      );
-    });
-  };
-
-  planningTool(
-    "goals_list",
-    {
-      title: "List goals",
-      description:
-        "List active Goals by default, or include completed and archived Goals with filters.",
-      inputSchema: listSchema,
-    },
-    (input) => planningService.listGoals(context, input),
-  );
-  planningTool(
-    "goal_create",
-    {
-      title: "Create goal",
-      description: "Create an active Goal at the end of the Goal order.",
-      inputSchema: goalCreateSchema,
-    },
-    (input: z.input<typeof goalCreateSchema>) =>
-      planningService.createGoal(context, input),
-  );
-  planningTool(
-    "goal_update",
-    {
-      title: "Update goal",
-      description:
-        "Edit or change Goal lifecycle status. A Goal with a running Session cannot be completed or archived.",
-      inputSchema: goalUpdateSchema,
-    },
-    (input: z.input<typeof goalUpdateSchema>) =>
-      planningService.updateGoal(context, input),
-  );
-  planningTool(
-    "goals_reorder",
-    {
-      title: "Reorder goals",
-      description:
-        "Replace the complete Goal order. Every Goal ID must appear exactly once.",
-      inputSchema: z.object({ ids: z.array(z.string().uuid()).min(1) }),
-    },
-    (input: { ids: string[] }) =>
-      planningService.reorderGoals(context, input.ids),
-  );
-  planningTool(
-    "tracks_list",
-    {
-      title: "List tracks",
-      description:
-        "List Tracks in a Goal with lifecycle filters and safe pagination.",
-      inputSchema: listSchema.extend({ goalId: z.string().uuid() }),
-    },
-    ({ goalId, ...input }: { goalId: string } & z.input<typeof listSchema>) =>
-      planningService.listTracks(context, goalId, input),
-  );
-  planningTool(
-    "track_create",
-    {
-      title: "Create track",
-      description: "Create an active Track inside a Goal.",
-      inputSchema: trackCreateSchema,
-    },
-    (input: z.input<typeof trackCreateSchema>) =>
-      planningService.createTrack(context, input),
-  );
-  planningTool(
-    "track_update",
-    {
-      title: "Update track",
-      description:
-        "Edit or change Track lifecycle status. A Track with a running Session cannot be completed or archived.",
-      inputSchema: trackUpdateSchema,
-    },
-    (input: z.input<typeof trackUpdateSchema>) =>
-      planningService.updateTrack(context, input),
-  );
-  planningTool(
-    "tracks_reorder",
-    {
-      title: "Reorder tracks",
-      description: "Replace the complete Track order within one Goal.",
-      inputSchema: z.object({
-        goalId: z.string().uuid(),
-        ids: z.array(z.string().uuid()).min(1),
-      }),
-    },
-    (input: { goalId: string; ids: string[] }) =>
-      planningService.reorderTracks(context, input.goalId, input.ids),
-  );
-  planningTool(
-    "tasks_list",
-    {
-      title: "List tasks",
-      description:
-        "List Tasks in a Track with status filters and safe pagination.",
-      inputSchema: listSchema.extend({ trackId: z.string().uuid() }),
-    },
-    ({ trackId, ...input }: { trackId: string } & z.input<typeof listSchema>) =>
-      planningService.listTasks(context, trackId, input),
-  );
-  planningTool(
-    "tasks_create",
-    {
-      title: "Create tasks",
-      description:
-        "Create 1–50 Tasks in order. The first pending Task becomes Current Next only when the Track has none. An idempotency key makes retries safe.",
-      inputSchema: tasksCreateSchema,
-    },
-    (input: z.input<typeof tasksCreateSchema>) =>
-      planningService.createTasks(context, input),
-  );
-  planningTool(
-    "task_update",
-    {
-      title: "Update task",
-      description:
-        "Edit Task content, estimate, note, and paired resource fields.",
-      inputSchema: taskUpdateSchema,
-    },
-    (input: z.input<typeof taskUpdateSchema>) =>
-      planningService.updateTask(context, input),
-  );
-  planningTool(
-    "tasks_reorder",
-    {
-      title: "Reorder tasks",
-      description:
-        "Replace the complete Task order without changing Current Next.",
-      inputSchema: z.object({
-        trackId: z.string().uuid(),
-        ids: z.array(z.string().uuid()).min(1),
-      }),
-    },
-    (input: { trackId: string; ids: string[] }) =>
-      planningService.reorderTasks(context, input.trackId, input.ids),
-  );
-
-  for (const [name, title, operation] of [
-    [
-      "task_complete",
-      "Complete task",
-      planningService.completeTask.bind(planningService),
-    ],
-    ["task_skip", "Skip task", planningService.skipTask.bind(planningService)],
-    [
-      "task_archive",
-      "Archive task",
-      planningService.archiveTask.bind(planningService),
-    ],
-    [
-      "task_reopen",
-      "Reopen task",
-      planningService.reopenTask.bind(planningService),
-    ],
-  ] as const) {
-    planningTool(
-      name,
-      {
-        title,
-        description: `${title}. If it is Current Next, the pointer advances atomically; reopening never takes over Current Next.`,
-        inputSchema: z.object({ id: z.string().uuid() }),
-      },
-      (input: { id: string }) => operation(context, input.id),
-    );
-  }
-
-  planningTool(
-    "next_get",
-    {
-      title: "Get Current Next",
-      description:
-        "Read Current Next for one Track, or for every active Track when trackId is omitted.",
-      inputSchema: z.object({ trackId: z.string().uuid().optional() }),
-    },
-    (input: { trackId?: string }) =>
-      input.trackId
-        ? planningService.getNextForTrack(context, input.trackId)
-        : planningService.getNextForAllTracks(context),
-  );
-  planningTool(
-    "next_set",
-    {
-      title: "Set Current Next",
-      description:
-        "Set Current Next to a pending Task in the same Track, or explicitly clear it with null.",
-      inputSchema: z.object({
-        trackId: z.string().uuid(),
-        taskId: z.string().uuid().nullable(),
-      }),
-    },
-    (input: { trackId: string; taskId: string | null }) =>
-      planningService.setNext(context, input.trackId, input.taskId),
-  );
-
-  // Session, Distraction and Dashboard all expose the same adapter shape:
-  // domain error in, structured Result out.
-  const sessionTool = <T extends object>(
+  // One generic wrapper for every Result-shaped domain tool: structured
+  // errors come back as { ok: false, error: { code, message } }.
+  const domainTool = <T extends object>(
     name: string,
     options: {
       title: string;
@@ -362,42 +163,306 @@ export function createTimeOsMcpServer(deps: {
     });
   };
 
-  sessionTool(
+  // ---- Execution context -------------------------------------------------
+
+  domainTool(
     "dashboard_get",
     {
       title: "Get dashboard",
       description:
-        "Read real-time today focus statistics, active session, selected focus track, and all active tracks with their current next task.",
-      inputSchema: z.object({
-        manualTrackId: z.string().uuid().optional(),
-      }),
+        "Read serverNow, the unfinished Session, the effective selection with its resume hint, a few pending todos, active goals, and today's summary.",
+      inputSchema: dashboardQuerySchema,
     },
-    (input) => dashboardService.getDashboard(context, input),
+    () => dashboardService.getDashboard(context),
   );
 
-  sessionTool(
+  domainTool(
+    "selection_set",
+    {
+      title: "Set selection",
+      description:
+        "Set the execution selection to an active Goal. Omit taskId to auto-pick the Goal's next pending Task; pass null for explicit goal-only execution.",
+      inputSchema: z
+        .object({
+          goalId: z.string().uuid(),
+          taskId: z.string().uuid().nullable().optional(),
+        })
+        .strict(),
+    },
+    (input: { goalId: string; taskId?: string | null }) =>
+      selectionService.set(context, input),
+  );
+
+  domainTool(
+    "selection_clear",
+    {
+      title: "Clear selection",
+      description: "Clear the stored execution selection entirely.",
+      inputSchema: z.object({}).strict(),
+    },
+    () => selectionService.clear(context),
+  );
+
+  // ---- Goals --------------------------------------------------------------
+
+  domainTool(
+    "goals_list",
+    {
+      title: "List goals",
+      description:
+        "List active Goals by default, or include completed and archived Goals with filters.",
+      inputSchema: listSchema,
+    },
+    (input) => planningService.listGoals(context, input),
+  );
+
+  domainTool(
+    "goal_get",
+    {
+      title: "Get goal",
+      description: "Read one Goal by id.",
+      inputSchema: z.object({ id: z.string().uuid() }).strict(),
+    },
+    (input: { id: string }) => planningService.getGoal(context, input.id),
+  );
+
+  domainTool(
+    "goal_create",
+    {
+      title: "Create goal",
+      description: "Create an active Goal at the end of the Goal order.",
+      inputSchema: goalCreateSchema,
+    },
+    (input: z.output<typeof goalCreateSchema>) =>
+      planningService.createGoal(context, input),
+  );
+
+  domainTool(
+    "goal_update",
+    {
+      title: "Update goal",
+      description:
+        "Edit or change Goal lifecycle status. A Goal with an unfinished Session cannot be completed or archived.",
+      inputSchema: goalUpdateSchema,
+    },
+    (input: z.output<typeof goalUpdateSchema>) =>
+      planningService.updateGoal(context, input),
+  );
+
+  domainTool(
+    "goals_reorder",
+    {
+      title: "Reorder goals",
+      description:
+        "Replace the complete Goal order. Every Goal ID must appear exactly once.",
+      inputSchema: z
+        .object({ ids: z.array(z.string().uuid()).min(1) })
+        .strict(),
+    },
+    (input: { ids: string[] }) =>
+      planningService.reorderGoals(context, input.ids),
+  );
+
+  // ---- Tasks --------------------------------------------------------------
+
+  domainTool(
+    "tasks_list",
+    {
+      title: "List tasks",
+      description:
+        "List Tasks in a Goal with status filters and safe pagination.",
+      inputSchema: listSchema.extend({ goalId: z.string().uuid() }).strict(),
+    },
+    ({ goalId, ...input }: { goalId: string } & z.output<typeof listSchema>) =>
+      planningService.listTasks(context, goalId, input),
+  );
+
+  domainTool(
+    "tasks_create",
+    {
+      title: "Create tasks",
+      description:
+        "Create 1–50 Tasks in order inside a Goal. Never changes the stored selection. An idempotency key makes retries safe.",
+      inputSchema: tasksCreateSchema,
+    },
+    (input: z.output<typeof tasksCreateSchema>) =>
+      planningService.createTasks(context, input),
+  );
+
+  domainTool(
+    "tasks_reorder",
+    {
+      title: "Reorder tasks",
+      description:
+        "Replace the complete Task order within one Goal. A still-valid explicit selection survives.",
+      inputSchema: z
+        .object({
+          goalId: z.string().uuid(),
+          ids: z.array(z.string().uuid()).min(1),
+        })
+        .strict(),
+    },
+    (input: { goalId: string; ids: string[] }) =>
+      planningService.reorderTasks(context, input.goalId, input.ids),
+  );
+
+  domainTool(
+    "task_update",
+    {
+      title: "Update task",
+      description:
+        "Edit Task content, estimate, note, and paired resource fields. Only pending Tasks can be edited.",
+      inputSchema: taskUpdateSchema,
+    },
+    (input: z.output<typeof taskUpdateSchema>) =>
+      planningService.updateTask(context, input),
+  );
+
+  for (const [name, title, operation, description] of [
+    [
+      "task_complete",
+      "Complete task",
+      planningService.completeTask.bind(planningService),
+      "Marks the Task completed. If it is the selected Task, the selection advances atomically (same-Goal next pending → first pending → goal-only); completing another Task never steals the selection. Blocked while an unfinished Session is attached.",
+    ],
+    [
+      "task_skip",
+      "Skip task",
+      planningService.skipTask.bind(planningService),
+      "Skips the pending Task with the same selection and Session rules as task_complete.",
+    ],
+    [
+      "task_archive",
+      "Archive task",
+      planningService.archiveTask.bind(planningService),
+      "Archives the pending Task with the same selection and Session rules as task_complete.",
+    ],
+    [
+      "task_reopen",
+      "Reopen task",
+      planningService.reopenTask.bind(planningService),
+      "Reopens a non-pending Task; never takes over the selection.",
+    ],
+  ] as const) {
+    domainTool(
+      name,
+      {
+        title,
+        description,
+        inputSchema: z.object({ id: z.string().uuid() }).strict(),
+      },
+      (input: { id: string }) => operation(context, input.id),
+    );
+  }
+
+  // ---- Sessions (stopwatch execution loop) ---------------------------------
+
+  domainTool(
     "session_get_active",
     {
       title: "Get active session",
       description:
-        "Read the single active or paused Session, or return null if none is running.",
-      inputSchema: z.object({}),
+        "Read the single unfinished (active or paused) Session with goal, task, intervals, serverNow and available actions, or null if none is running.",
+      inputSchema: z.object({}).strict(),
     },
     () => sessionService.getActiveSession(context),
   );
 
-  sessionTool(
+  domainTool(
     "session_get",
     {
       title: "Get session",
       description:
-        "Read complete Session details including Track, optional Task, and active Distractions.",
-      inputSchema: z.object({ id: z.string().uuid() }),
+        "Read complete Session details including Goal, optional Task, focus intervals and distractions.",
+      inputSchema: z.object({ id: z.string().uuid() }).strict(),
     },
     (input: { id: string }) => sessionService.getSession(context, input.id),
   );
 
-  sessionTool(
+  domainTool(
+    "session_start",
+    {
+      title: "Start session",
+      description:
+        "Start a stopwatch Session for a Goal. taskId omitted or null means goal-only execution; attaching a Task requires its exact id (never auto-picked). Fails with ACTIVE_SESSION_EXISTS if an unfinished Session already exists. On success the selection syncs to the started object.",
+      inputSchema: sessionStartSchema,
+    },
+    (input: z.output<typeof sessionStartSchema>) =>
+      sessionService.startSession(context, input),
+  );
+
+  domainTool(
+    "session_pause",
+    {
+      title: "Pause session",
+      description:
+        "Pause the running Session, closing its open focus interval. Idempotent when already paused.",
+      inputSchema: sessionPauseSchema,
+    },
+    (input: { id: string }) => sessionService.pauseSession(context, input.id),
+  );
+
+  domainTool(
+    "session_resume",
+    {
+      title: "Resume session",
+      description:
+        "Resume a paused Session, opening a new focus interval. Idempotent when already running.",
+      inputSchema: sessionResumeSchema,
+    },
+    (input: { id: string }) => sessionService.resumeSession(context, input.id),
+  );
+
+  domainTool(
+    "session_finish",
+    {
+      title: "Finish session",
+      description:
+        "Finish the Session and save its authoritative focus time from the observed intervals. Idempotent retries return the same completed record. Task completion is a separate explicit action (task_complete), not part of finishing.",
+      inputSchema: sessionFinishSchema,
+    },
+    (input: z.output<typeof sessionFinishSchema>) =>
+      sessionService.finishSession(context, input.id, input),
+  );
+
+  domainTool(
+    "session_cancel",
+    {
+      title: "Cancel session",
+      description:
+        "Cancel a Session as a mis-start or void record. The record is kept but excluded from default history and statistics; the exclusivity slot is released and it can never be revived.",
+      inputSchema: sessionCancelSchema,
+    },
+    (input: { id: string }) => sessionService.cancelSession(context, input.id),
+  );
+
+  domainTool(
+    "session_note_update",
+    {
+      title: "Update session note",
+      description:
+        "Save the Session note with an expected content version. A stale version returns VERSION_CONFLICT instead of overwriting newer text.",
+      inputSchema: sessionNoteUpdateSchema,
+    },
+    (input: z.output<typeof sessionNoteUpdateSchema>) =>
+      sessionService.updateNote(context, input),
+  );
+
+  domainTool(
+    "session_resume_hint_update",
+    {
+      title: "Update resume hint",
+      description:
+        "Save the resume hint for the next continuation, with an expected content version. Allowed on active, paused and completed Sessions; its failure never rolls back saved time.",
+      inputSchema: sessionResumeHintUpdateSchema,
+    },
+    (input: z.output<typeof sessionResumeHintUpdateSchema>) =>
+      sessionService.updateResumeHint(context, input),
+  );
+
+  // ---- History / statistics ----------------------------------------------
+
+  domainTool(
     "sessions_list",
     {
       title: "List sessions",
@@ -405,157 +470,92 @@ export function createTimeOsMcpServer(deps: {
         "List Session history with half-open time boundaries and safe cursor pagination. Cancelled records are hidden unless explicitly requested.",
       inputSchema: sessionListSchema,
     },
-    (input: z.input<typeof sessionListSchema>) =>
+    (input: z.output<typeof sessionListSchema>) =>
       historyService.listSessions(context, input),
   );
 
-  sessionTool(
+  domainTool(
     "session_log",
     {
       title: "Log manual session",
       description:
-        "Log completed focus time. Overlap requires an explicit retry with allowOverlap=true; idempotencyKey makes retries safe.",
+        "Log completed focus time against a Goal (Task and text optional). Overlap requires an explicit retry with allowOverlap=true; idempotencyKey makes retries safe. Manual logs never touch the selection.",
       inputSchema: sessionLogSchema,
     },
-    (input: z.input<typeof sessionLogSchema>) =>
+    (input: z.output<typeof sessionLogSchema>) =>
       historyService.logSession(context, input),
   );
 
-  sessionTool(
+  domainTool(
     "session_update",
     {
       title: "Correct session",
       description:
-        "Correct a completed Session without changing entryMode or createdVia. Overlap requires allowOverlap=true.",
+        "Correct a completed Session's ownership, times, or text. Time edits switch the statistics basis to corrected while keeping the original intervals. Overlap requires allowOverlap=true.",
       inputSchema: sessionUpdateSchema,
     },
-    (input: z.input<typeof sessionUpdateSchema>) =>
+    (input: z.output<typeof sessionUpdateSchema>) =>
       historyService.updateSession(context, input),
   );
 
-  sessionTool(
+  domainTool(
     "stats_get",
     {
       title: "Get focus statistics",
       description:
-        "Get today, week, month, or custom focus totals using the configured timezone and real instant boundaries.",
+        "Get today, week, month, or custom focus totals by Goal, using the configured timezone and real interval math.",
       inputSchema: statsQuerySchema,
     },
-    (input: z.input<typeof statsQuerySchema>) =>
+    (input: z.output<typeof statsQuerySchema>) =>
       statisticsService.getStatistics(context, input),
   );
 
-  sessionTool(
-    "session_start",
-    {
-      title: "Start session",
-      description:
-        "Start a focus timer for a Track, optionally linked to a pending Task. Fails if another session is already active or paused.",
-      inputSchema: sessionStartSchema,
-    },
-    (input: z.input<typeof sessionStartSchema>) =>
-      sessionService.startSession(context, input),
-  );
+  // ---- Distractions -------------------------------------------------------
 
-  sessionTool(
-    "session_pause",
-    {
-      title: "Pause session",
-      description:
-        "Pause a currently active focus session. Idempotent if already paused.",
-      inputSchema: z.object({ id: z.string().uuid() }),
-    },
-    (input: { id: string }) => sessionService.pauseSession(context, input.id),
-  );
-
-  sessionTool(
-    "session_resume",
-    {
-      title: "Resume session",
-      description:
-        "Resume a paused focus session. Idempotent if already active.",
-      inputSchema: z.object({ id: z.string().uuid() }),
-    },
-    (input: { id: string }) => sessionService.resumeSession(context, input.id),
-  );
-
-  sessionTool(
-    "session_finish",
-    {
-      title: "Finish session",
-      description:
-        "Finish a focus session, optionally reviewing and advancing the associated Task (continue_later, completed, or skip) atomically.",
-      inputSchema: sessionFinishSchema,
-    },
-    (input: z.input<typeof sessionFinishSchema>) => {
-      if (input.outcome) {
-        return sessionService.finishSessionReview(context, {
-          sessionId: input.id,
-          note: input.note,
-          outcome: input.outcome,
-        });
-      }
-      return sessionService.finishSession(context, input.id, {
-        note: input.note,
-      });
-    },
-  );
-
-  sessionTool(
-    "session_cancel",
-    {
-      title: "Cancel session",
-      description:
-        "Cancel a non-cancelled Session, including an incorrect completed record. It remains in audit history but is excluded from default history and stats.",
-      inputSchema: z.object({ id: z.string().uuid() }),
-    },
-    (input: { id: string }) => sessionService.cancelSession(context, input.id),
-  );
-
-  sessionTool(
+  domainTool(
     "distractions_list",
     {
       title: "List distractions",
       description:
-        "List distractions logged for a session (defaults to the currently active or paused session).",
+        "List distractions logged for a Session (defaults to the currently unfinished Session).",
       inputSchema: distractionListSchema,
     },
-    (input: z.input<typeof distractionListSchema>) =>
+    (input: z.output<typeof distractionListSchema>) =>
       distractionService.listDistractions(context, input),
   );
 
-  sessionTool(
+  domainTool(
     "distraction_log",
     {
       title: "Log distraction",
       description:
-        "Record a quick distraction during a focus session (defaults to the currently active or paused session).",
+        "Record a quick distraction during a Session (defaults to the currently unfinished Session).",
       inputSchema: distractionCreateSchema,
     },
-    (input: z.input<typeof distractionCreateSchema>) =>
+    (input: z.output<typeof distractionCreateSchema>) =>
       distractionService.createDistraction(context, input),
   );
 
-  sessionTool(
+  domainTool(
     "distraction_update",
     {
       title: "Update distraction",
       description: "Edit the text content of a distraction note.",
       inputSchema: distractionUpdateSchema,
     },
-    (input: z.input<typeof distractionUpdateSchema>) =>
+    (input: z.output<typeof distractionUpdateSchema>) =>
       distractionService.updateDistraction(context, input.id, {
         text: input.text,
       }),
   );
 
-  sessionTool(
+  domainTool(
     "distraction_archive",
     {
       title: "Archive distraction",
       description:
         "Soft-archive a distraction note so it is hidden from default view.",
-      inputSchema: z.object({ id: z.string().uuid() }),
+      inputSchema: z.object({ id: z.string().uuid() }).strict(),
     },
     (input: { id: string }) =>
       distractionService.archiveDistraction(context, input.id),

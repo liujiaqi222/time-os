@@ -16,7 +16,6 @@ import { Input } from "@/components/ui/input";
 type SettingsFormProps = {
   mode: "setup" | "settings";
   timezone: string;
-  defaultFocusMinutes: number;
   weekStartsOn: number;
   suggestBrowserTimezone?: boolean;
 };
@@ -56,21 +55,9 @@ export function SettingsForm(props: SettingsFormProps) {
             required
           />
           <FieldDescription>
-            使用 IANA 名称，例如 Asia/Shanghai。
+            使用 IANA 名称，例如 Asia/Shanghai。统计按时区计算，不改动原始 UTC
+            记录。
           </FieldDescription>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="defaultFocusMinutes">默认专注时长</FieldLabel>
-          <Input
-            id="defaultFocusMinutes"
-            name="defaultFocusMinutes"
-            type="number"
-            min={1}
-            max={1440}
-            defaultValue={props.defaultFocusMinutes}
-            required
-          />
-          <FieldDescription>新专注的默认分钟数。</FieldDescription>
         </Field>
         <Field>
           <FieldLabel htmlFor="weekStartsOn">每周开始于</FieldLabel>

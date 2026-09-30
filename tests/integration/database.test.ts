@@ -5,21 +5,18 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  settingsGetContract,
-  settingsUpdateContract,
-} from "@/adapters/settings-contract";
 import * as schema from "@/db/schema";
 import { createSettingsService } from "@/services/settings";
 import { createPlanningService } from "@/services/planning";
+import { createSelectionService } from "@/services/selection";
 import { createDistractionService } from "@/services/distraction";
 import { createDashboardService } from "@/services/dashboard";
 import { createSessionService } from "@/services/session";
 import { createHistoryService } from "@/services/history";
 import { createStatisticsService } from "@/services/statistics";
 import { planningContract } from "@/adapters/planning-contract";
-import { sessionContract } from "@/adapters/session-contract";
 import { createTimeOsMcpServer } from "@/mcp/server";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 
 const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -37,11 +34,26 @@ if (
 
 const pool = new Pool({ connectionString: databaseUrl, max: 5 });
 const database = drizzle(pool, { schema });
+const transitionQueries: string[] = [];
+const transitionDatabase = drizzle(pool, {
+  schema,
+  logger: {
+    logQuery(query) {
+      transitionQueries.push(query);
+    },
+  },
+});
 const settingsService = createSettingsService(database);
 const planningService = createPlanningService(database);
+const selectionService = createSelectionService(database);
 const distractionService = createDistractionService(database);
 const sessionService = createSessionService(database, {
   distractionService,
+});
+const transitionDistractionService =
+  createDistractionService(transitionDatabase);
+const transitionSessionService = createSessionService(transitionDatabase, {
+  distractionService: transitionDistractionService,
 });
 const historyService = createHistoryService(database);
 const statisticsService = createStatisticsService(database, {
@@ -49,7 +61,7 @@ const statisticsService = createStatisticsService(database, {
 });
 const dashboardService = createDashboardService(database, {
   sessionService,
-  settingsService,
+  selectionService,
   statisticsService,
 });
 
@@ -64,8 +76,17 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe("committed migrations", () => {
-  it("create the complete schema and can be run repeatedly", async () => {
+beforeEach(async () => {
+  await pool.query(
+    "truncate distractions, focus_intervals, sessions, tasks, goals, idempotency_records restart identity cascade",
+  );
+  await pool.query(
+    "update app_settings set selected_goal_id = null, selected_task_id = null where id = 'default'",
+  );
+});
+
+describe("committed migrations (empty-database initialization)", () => {
+  it("create the complete v3 schema from an empty database and can run repeatedly", async () => {
     await migrate(database, { migrationsFolder: "drizzle" });
     const result = await pool.query<{ table_name: string }>(
       `select table_name
@@ -77,39 +98,65 @@ describe("committed migrations", () => {
     expect(result.rows.map((row) => row.table_name)).toEqual([
       "app_settings",
       "distractions",
+      "focus_intervals",
       "goals",
       "idempotency_records",
       "login_attempts",
       "sessions",
       "tasks",
-      "tracks",
     ]);
   });
 
-  it("allows only one active or paused session under concurrency", async () => {
+  it("enforces the Session/Task/Goal ownership composite foreign key", async () => {
     const goalId = randomUUID();
-    const trackId = randomUUID();
+    const otherGoalId = randomUUID();
+    const taskId = randomUUID();
+    await pool.query(
+      `insert into goals (id, title, position) values ($1, 'Goal', 1), ($2, 'Other', 2)`,
+      [goalId, otherGoalId],
+    );
+    await pool.query(
+      `insert into tasks (id, goal_id, title, position) values ($1, $2, 'Task', 1)`,
+      [taskId, goalId],
+    );
+
+    // A Session claiming the Task under another Goal is impossible.
+    await expect(
+      pool.query(
+        `insert into sessions (goal_id, task_id, status, entry_mode, created_via, timer_mode, time_basis, started_at)
+         values ($1, $2, 'active', 'timer', 'web', 'stopwatch', 'observed', now())`,
+        [otherGoalId, taskId],
+      ),
+    ).rejects.toThrow(/sessions_task_goal_fk|foreign key/i);
+
+    // Task positions are unique inside one Goal.
+    await expect(
+      pool.query(
+        `insert into tasks (id, goal_id, title, position) values ($1, $2, 'Clash', 1)`,
+        [randomUUID(), goalId],
+      ),
+    ).rejects.toThrow(/tasks_goal_position_unique|duplicate key/i);
+  });
+
+  it("allows only one unfinished session per instance under concurrency", async () => {
+    const goalId = randomUUID();
     await pool.query(
       `insert into goals (id, title, position) values ($1, 'Goal', 1)`,
       [goalId],
-    );
-    await pool.query(
-      `insert into tracks (id, goal_id, title, position) values ($1, $2, 'Track', 1)`,
-      [trackId, goalId],
     );
 
     const results = await Promise.allSettled([
       pool.query(
         `insert into sessions
-          (track_id, status, entry_mode, created_via, started_at)
-         values ($1, 'active', 'timer', 'web', now())`,
-        [trackId],
+          (goal_id, status, entry_mode, created_via, timer_mode, time_basis, started_at)
+         values ($1, 'active', 'timer', 'web', 'stopwatch', 'observed', now())`,
+        [goalId],
       ),
       pool.query(
         `insert into sessions
-          (track_id, status, entry_mode, created_via, started_at)
-         values ($1, 'paused', 'timer', 'mcp', now())`,
-        [trackId],
+          (goal_id, status, entry_mode, created_via, timer_mode, time_basis, started_at)
+         values ($1, 'paused', 'timer', 'mcp', 'stopwatch', 'observed', now())`,
+        [goalId],
       ),
     ]);
 
@@ -119,257 +166,121 @@ describe("committed migrations", () => {
     expect(
       results.filter((result) => result.status === "rejected"),
     ).toHaveLength(1);
-    await pool.query("delete from sessions");
   });
 });
 
-describe("planning service", () => {
+describe("planning service and selection", () => {
   const web = { actor: "web" } as const;
   const mcp = { actor: "mcp" } as const;
 
-  async function createPlan(label: string) {
+  async function createGoalWithTasks(label: string, titles: string[]) {
     const goal = await planningService.createGoal(web, {
       title: `Goal ${label}`,
     });
-    const track = await planningService.createTrack(web, {
-      goalId: goal.id,
-      title: `Track ${label}`,
-    });
-    return { goal, track };
+    const tasks = titles.length
+      ? await planningService.createTasks(web, {
+          goalId: goal.id,
+          tasks: titles.map((title) => ({ title })),
+        })
+      : [];
+    return { goal, tasks };
   }
 
-  it("assigns the first Task as Current Next and advances using the latest order", async () => {
-    const { track } = await createPlan("advance");
-    const [first, second, third] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "First" }, { title: "Second" }, { title: "Third" }],
-    });
-    expect(
-      (
-        (await planningService.getNextForTrack(web, track.id)) as
-          typeof schema.tasks.$inferSelect | null
-      )?.id,
-    ).toBe(first?.id);
-
-    await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Fourth" }],
-    });
-    expect(
-      (
-        (await planningService.getNextForTrack(web, track.id)) as
-          typeof schema.tasks.$inferSelect | null
-      )?.id,
-    ).toBe(first?.id);
-
-    await planningService.reorderTasks(web, track.id, [
-      third!.id,
-      first!.id,
-      second!.id,
-      (
-        await planningService.listTasks(web, track.id, {
-          includeArchived: true,
-        })
-      ).items[3]!.id,
+  it("creates goals idempotently and appends tasks in order", async () => {
+    const key = `goal-${randomUUID()}`;
+    const [first, replay] = await Promise.all([
+      planningService.createGoal(web, { title: "Once", idempotencyKey: key }),
+      planningService.createGoal(mcp, { title: "Once", idempotencyKey: key }),
     ]);
-    const completed = await planningService.completeTask(web, first!.id);
-    expect(completed.nextTask?.id).toBe(second?.id);
-
-    const reopened = await planningService.reopenTask(web, first!.id);
-    expect(reopened.affectedTask.status).toBe("pending");
-    expect(reopened.nextTask?.id).toBe(second?.id);
-  });
-
-  it("validates resource pairs and keeps idempotent batches stable", async () => {
-    const { track } = await createPlan("idempotency");
+    expect(replay.id).toBe(first.id);
     await expect(
-      planningService.createTasks(web, {
-        trackId: track.id,
-        tasks: [
-          {
-            title: "Bad URL",
-            resourceType: "url",
-            resourceValue: "ftp://example.com",
-          },
-        ],
-      }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-
-    const input = {
-      trackId: track.id,
-      tasks: [{ title: "Only once" }, { title: "Also once" }],
-      idempotencyKey: `key-${randomUUID()}`,
-    };
-    const [left, right] = await Promise.all([
-      planningService.createTasks(web, input),
-      planningService.createTasks(mcp, input),
-    ]);
-    expect(right.map(({ id }) => id)).toEqual(left.map(({ id }) => id));
-    expect(
-      (
-        await planningService.listTasks(web, track.id, {
-          includeArchived: true,
-        })
-      ).items,
-    ).toHaveLength(2);
-
-    await expect(
-      planningService.createTasks(web, {
-        ...input,
-        tasks: [{ title: "Different" }],
+      planningService.createGoal(web, {
+        title: "Different",
+        idempotencyKey: key,
       }),
     ).rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+
+    const { goal, tasks } = await createGoalWithTasks("order", [
+      "First",
+      "Second",
+      "Third",
+    ]);
+    expect(tasks.map((task) => task.position)).toEqual([1, 2, 3]);
+    void goal;
   });
 
-  it("advances on skip/archive, ignores non-Next transitions, and preserves children across parent lifecycle", async () => {
-    const { goal, track } = await createPlan("lifecycle");
-    const [first, second, third] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "First" }, { title: "Second" }, { title: "Third" }],
+  it("selection_set: omitted taskId auto-resolves, null is goal-only, a uuid pins the Task", async () => {
+    const { goal, tasks } = await createGoalWithTasks("select", ["One", "Two"]);
+
+    // Omitted → auto: first pending Task.
+    const auto = await selectionService.set(web, { goalId: goal.id });
+    expect(auto.task?.id).toBe(tasks[0]!.id);
+    expect(auto.goalOnly).toBe(false);
+
+    // Explicit null → goal-only, surviving new Tasks and reorders.
+    const goalOnly = await selectionService.set(web, {
+      goalId: goal.id,
+      taskId: null,
     });
-
-    expect((await planningService.skipTask(web, first!.id)).nextTask?.id).toBe(
-      second!.id,
-    );
-    expect(
-      (await planningService.archiveTask(web, third!.id)).nextTask?.id,
-    ).toBe(second!.id);
-    await planningService.reopenTask(web, first!.id);
-    await planningService.setNext(web, track.id, first!.id);
-    expect(
-      (await planningService.archiveTask(web, first!.id)).nextTask?.id,
-    ).toBe(second!.id);
-
-    await planningService.updateTrack(web, {
-      id: track.id,
-      status: "completed",
+    expect(goalOnly.goalOnly).toBe(true);
+    await planningService.createTasks(web, {
+      goalId: goal.id,
+      tasks: [{ title: "Later" }],
     });
-    await planningService.updateTrack(web, { id: track.id, status: "active" });
-    await planningService.updateGoal(web, {
-      id: goal.id,
-      status: "archived",
+    const stored = await selectionService.getStored(web);
+    expect(stored).toEqual({ goalId: goal.id, taskId: null });
+
+    // Explicit uuid pins that Task.
+    const pinned = await selectionService.set(web, {
+      goalId: goal.id,
+      taskId: tasks[1]!.id,
     });
-    await planningService.updateGoal(web, { id: goal.id, status: "active" });
+    expect(pinned.task?.id).toBe(tasks[1]!.id);
 
-    const restored = await planningService.getTrack(web, track.id);
-    expect(restored).toMatchObject({
-      status: "active",
-      currentTaskId: second!.id,
-    });
-    expect(
-      (
-        await planningService.listTasks(web, track.id, {
-          includeArchived: true,
-        })
-      ).items,
-    ).toHaveLength(3);
-  });
-
-  it("requires reactivation before editing completed planning entities", async () => {
-    const { goal, track } = await createPlan("read-only-lifecycle");
-    const [completedTask, pendingTask] = await planningService.createTasks(
-      web,
-      {
-        trackId: track.id,
-        tasks: [{ title: "Completed" }, { title: "Still pending" }],
-      },
-    );
-
-    await planningService.completeTask(web, completedTask!.id);
+    // Cross-Goal and non-pending selections are domain errors.
+    const other = await createGoalWithTasks("other", ["Other"]);
     await expect(
-      planningService.updateTask(web, {
-        id: completedTask!.id,
-        title: "Edited while completed",
+      selectionService.set(web, {
+        goalId: goal.id,
+        taskId: other.tasks[0]!.id,
       }),
+    ).rejects.toMatchObject({ code: "TASK_NOT_IN_GOAL" });
+    await planningService.completeTask(web, tasks[1]!.id);
+    await expect(
+      selectionService.set(web, { goalId: goal.id, taskId: tasks[1]!.id }),
     ).rejects.toMatchObject({ code: "TASK_NOT_PENDING" });
 
-    await planningService.updateGoal(web, {
-      id: goal.id,
-      status: "completed",
-    });
-    await expect(
-      planningService.updateGoal(web, {
-        id: goal.id,
-        title: "Edited while completed",
-      }),
-    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
-    await expect(
-      planningService.updateTrack(web, {
-        id: track.id,
-        title: "Edited under completed Goal",
-      }),
-    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
-    await expect(
-      planningService.createTrack(web, {
-        goalId: goal.id,
-        title: "Added under completed Goal",
-      }),
-    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
-
-    await planningService.updateGoal(web, { id: goal.id, status: "active" });
-    await planningService.updateTrack(web, {
-      id: track.id,
-      status: "completed",
-    });
-    await expect(
-      planningService.updateTrack(web, {
-        id: track.id,
-        title: "Edited while completed",
-      }),
-    ).rejects.toMatchObject({ code: "TRACK_NOT_ACTIVE" });
-    await expect(
-      planningService.updateTask(web, {
-        id: pendingTask!.id,
-        title: "Edited under completed Track",
-      }),
-    ).rejects.toMatchObject({ code: "TRACK_NOT_ACTIVE" });
-
-    await planningService.updateTrack(web, { id: track.id, status: "active" });
-    await planningService.reopenTask(web, completedTask!.id);
-    await expect(
-      planningService.updateTask(web, {
-        id: completedTask!.id,
-        title: "Editable again",
-      }),
-    ).resolves.toMatchObject({ title: "Editable again" });
+    await selectionService.clear(web);
+    expect(await selectionService.getStored(web)).toBeNull();
   });
 
-  it("rejects incomplete orders and keeps Current Next valid during concurrent mutations", async () => {
-    const { track } = await createPlan("concurrency");
-    const [first, second, third] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
-    });
-    await expect(
-      planningService.reorderTasks(web, track.id, [first!.id, second!.id]),
-    ).rejects.toMatchObject({ code: "INVALID_POSITION_ORDER" });
-
-    await Promise.all([
-      planningService.completeTask(web, first!.id),
-      planningService.setNext(mcp, track.id, third!.id),
+  it("completing the selected Task advances the selection atomically; other transitions never steal it", async () => {
+    const { goal, tasks } = await createGoalWithTasks("advance", [
+      "One",
+      "Two",
+      "Three",
     ]);
-    const next = await planningService.getNextForTrack(web, track.id);
-    expect(next).toMatchObject({
-      id: third!.id,
-      trackId: track.id,
-      status: "pending",
-    });
-  });
+    await selectionService.set(web, { goalId: goal.id, taskId: tasks[0]!.id });
 
-  it("blocks parent lifecycle changes while its Session is running", async () => {
-    const { goal, track } = await createPlan("session-guard");
-    await pool.query(
-      `insert into sessions (track_id, status, entry_mode, created_via, started_at)
-       values ($1, 'active', 'timer', 'web', now())`,
-      [track.id],
-    );
-    await expect(
-      planningService.updateTrack(web, { id: track.id, status: "archived" }),
-    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
-    await expect(
-      planningService.updateGoal(web, { id: goal.id, status: "completed" }),
-    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
-    await pool.query("delete from sessions where track_id = $1", [track.id]);
+    await planningService.completeTask(web, tasks[0]!.id);
+    expect(await selectionService.getStored(web)).toEqual({
+      goalId: goal.id,
+      taskId: tasks[1]!.id,
+    });
+
+    // Completing a non-selected Task leaves the selection alone.
+    await planningService.completeTask(web, tasks[2]!.id);
+    expect(await selectionService.getStored(web)).toEqual({
+      goalId: goal.id,
+      taskId: tasks[1]!.id,
+    });
+
+    // Reopen never takes over the selection.
+    await planningService.reopenTask(web, tasks[0]!.id);
+    expect(await selectionService.getStored(web)).toEqual({
+      goalId: goal.id,
+      taskId: tasks[1]!.id,
+    });
   });
 
   it("maps Web and MCP through the same structured contract", async () => {
@@ -381,315 +292,610 @@ describe("planning service", () => {
       data: { title: "Contract", status: "active" },
     });
     const mcpResult = await planningContract(() =>
-      planningService.setNext(mcp, randomUUID(), null),
+      selectionService.set(mcp, { goalId: randomUUID() }),
     );
     expect(mcpResult).toMatchObject({
       ok: false,
-      error: { code: "TRACK_NOT_FOUND" },
+      error: { code: "GOAL_NOT_FOUND" },
     });
   });
 });
 
-describe("settings service and adapters", () => {
-  it("keeps a singleton and maps Web/MCP contracts identically", async () => {
-    const webResult = await settingsUpdateContract(
-      settingsService,
-      { actor: "web" },
-      {
-        timezone: "Asia/Shanghai",
-        defaultFocusMinutes: 40,
-        weekStartsOn: 1,
-      },
-      { completeSetup: true },
-    );
-    const mcpResult = await settingsGetContract(settingsService, {
-      actor: "mcp",
-    });
-
-    expect(webResult).toEqual(mcpResult);
-    expect(webResult).toMatchObject({
-      ok: true,
-      data: {
-        timezone: "Asia/Shanghai",
-        defaultFocusMinutes: 40,
-        weekStartsOn: 1,
-        setupCompleted: true,
-      },
-    });
-
-    const count = await pool.query<{ count: string }>(
-      "select count(*) from app_settings",
-    );
-    expect(count.rows[0]?.count).toBe("1");
-  });
-});
-
-describe("session service and focus execution loop", () => {
+describe("session service: stopwatch loop, exclusivity, idempotency", () => {
   const web = { actor: "web" } as const;
   const mcp = { actor: "mcp" } as const;
 
-  beforeEach(async () => {
-    await pool.query("delete from distractions");
-    await pool.query("delete from sessions");
-    await pool.query(
-      "delete from idempotency_records where operation in ('session_start', 'session_log')",
-    );
-  });
-
-  async function createPlan(label: string) {
+  async function createGoalWithTasks(label: string, titles: string[]) {
     const goal = await planningService.createGoal(web, {
       title: `Goal ${label}`,
     });
-    const track = await planningService.createTrack(web, {
-      goalId: goal.id,
-      title: `Track ${label}`,
-    });
-    return { goal, track };
+    const tasks = titles.length
+      ? await planningService.createTasks(web, {
+          goalId: goal.id,
+          tasks: titles.map((title) => ({ title })),
+        })
+      : [];
+    return { goal, tasks };
   }
 
-  it("starts a session, validates state invariants, and executes idempotent pause/resume", async () => {
-    const { track } = await createPlan("session-flow");
-    const [task] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Focus Task", estimatedMinutes: 25 }],
-    });
-
-    // Start session
+  it("runs the stopwatch loop with real focus intervals", async () => {
+    const { goal, tasks } = await createGoalWithTasks("loop", ["Focus"]);
     const session = await sessionService.startSession(web, {
-      trackId: track.id,
-      taskId: task!.id,
-      plannedMinutes: 25,
-      idempotencyKey: "test-idemp-1",
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
+      timerMode: "stopwatch",
+      intent: "写初稿",
+      idempotencyKey: "loop-1",
     });
 
     expect(session.status).toBe("active");
-    expect(session.trackId).toBe(track.id);
-    expect(session.taskId).toBe(task!.id);
-    expect(session.plannedMinutes).toBe(25);
+    expect(session.taskId).toBe(tasks[0]!.id);
+    expect(session.timerMode).toBe("stopwatch");
+    expect(session.timeBasis).toBe("observed");
+    expect(session.intent).toBe("写初稿");
+    expect(session.intervals).toHaveLength(1);
+    expect(session.intervals[0]!.endedAt).toBeNull();
+    expect(session.actions).toContain("pause");
 
-    // Concurrency: starting another active session fails
-    await expect(
-      sessionService.startSession(web, {
-        trackId: track.id,
-      }),
-    ).rejects.toMatchObject({
-      code: "ACTIVE_SESSION_EXISTS",
+    // A successful start syncs the selection (PRD §5.3).
+    expect(await selectionService.getStored(web)).toEqual({
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
     });
 
-    // Idempotent start retry with same key returns existing session
-    const retrySession = await sessionService.startSession(web, {
-      trackId: track.id,
-      taskId: task!.id,
-      plannedMinutes: 25,
-      idempotencyKey: "test-idemp-1",
-    });
-    expect(retrySession.id).toBe(session.id);
-
-    // Idempotent start retry with different payload throws IDEMPOTENCY_KEY_REUSED
-    await expect(
-      sessionService.startSession(web, {
-        trackId: track.id,
-        plannedMinutes: 50,
-        idempotencyKey: "test-idemp-1",
-      }),
-    ).rejects.toMatchObject({
-      code: "IDEMPOTENCY_KEY_REUSED",
-    });
-
-    // Pause session
+    await new Promise((resolve) => setTimeout(resolve, 60));
     const paused = await sessionService.pauseSession(web, session.id);
     expect(paused.status).toBe("paused");
-    expect(paused.pausedAt).not.toBeNull();
+    expect(paused.intervals).toHaveLength(1);
+    expect(paused.intervals[0]!.endedAt).not.toBeNull();
+    expect(paused.focusSeconds).toBe(session.focusSeconds);
 
-    // Idempotent repeat pause
-    const repeatPaused = await sessionService.pauseSession(web, session.id);
-    expect(repeatPaused.status).toBe("paused");
+    // Idempotent pause.
+    expect((await sessionService.pauseSession(web, session.id)).id).toBe(
+      session.id,
+    );
 
-    // Resume session
     const resumed = await sessionService.resumeSession(web, session.id);
     expect(resumed.status).toBe("active");
-    expect(resumed.pausedAt).toBeNull();
-    expect(resumed.totalPausedSeconds).toBeGreaterThanOrEqual(0);
+    expect(resumed.intervals).toHaveLength(2);
+    expect(resumed.intervals[1]!.endedAt).toBeNull();
 
-    // Idempotent repeat resume
-    const repeatResumed = await sessionService.resumeSession(web, session.id);
-    expect(repeatResumed.status).toBe("active");
+    // Idempotent resume.
+    expect((await sessionService.resumeSession(web, session.id)).id).toBe(
+      session.id,
+    );
 
-    // Finish session
+    await new Promise((resolve) => setTimeout(resolve, 60));
     const finished = await sessionService.finishSession(web, session.id, {
-      note: "Wrap up notes",
+      note: "收尾",
+      noteExpectedVersion: 0,
     });
     expect(finished.status).toBe("completed");
     expect(finished.endedAt).not.toBeNull();
     expect(finished.durationSeconds).toBeGreaterThanOrEqual(0);
-    expect(finished.note).toBe("Wrap up notes");
+    expect(finished.note).toBe("收尾");
+    expect(finished.noteVersion).toBe(1);
+    expect(finished.intervals.every((interval) => interval.endedAt)).toBe(true);
 
-    // Idempotent repeat finish
-    const repeatFinished = await sessionService.finishSession(web, session.id);
-    expect(repeatFinished.status).toBe("completed");
+    // Idempotent finish retry returns the same completed record.
+    const retry = await sessionService.finishSession(web, session.id, {
+      note: "迟到的旧请求",
+      noteExpectedVersion: 0,
+    });
+    expect(retry.id).toBe(finished.id);
+    expect(retry.note).toBe("收尾");
+    expect(retry.noteVersion).toBe(1);
 
-    // Cannot pause a completed session
-    await expect(
-      sessionService.pauseSession(web, session.id),
-    ).rejects.toMatchObject({
-      code: "INVALID_SESSION_STATE",
+    // The exclusivity slot is released and the selection stays.
+    expect(await sessionService.getActiveSession(web)).toBeNull();
+    expect(await selectionService.getStored(web)).toEqual({
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
     });
   });
 
-  it("cancelling a session releases the active lock and permits starting a new session", async () => {
-    const { track } = await createPlan("cancel-flow");
+  it("keeps pause and resume to one database roundtrip each", async () => {
+    const { goal } = await createGoalWithTasks("fast transitions", []);
     const session = await sessionService.startSession(web, {
-      trackId: track.id,
+      goalId: goal.id,
+      taskId: null,
+      timerMode: "stopwatch",
     });
 
-    const cancelled = await sessionService.cancelSession(web, session.id);
-    expect(cancelled.status).toBe("cancelled");
-    expect(cancelled.endedAt).not.toBeNull();
+    transitionQueries.length = 0;
+    const paused = await transitionSessionService.pauseSession(web, session.id);
+    expect(paused.status).toBe("paused");
+    expect(transitionQueries).toHaveLength(1);
 
-    // Cancelled sessions should be excluded from today stats
-    const dashboard = await dashboardService.getDashboard(web);
-    const cancelledSessionFocus = dashboard.todayStats.totalFocusSeconds;
-    // Start and immediately cancel a new session, verify stats don't increase
-    const tempSession = await sessionService.startSession(web, {
-      trackId: track.id,
-    });
-    await sessionService.cancelSession(web, tempSession.id);
-    const dashboardAfter = await dashboardService.getDashboard(web);
-    expect(dashboardAfter.todayStats.totalFocusSeconds).toBe(
-      cancelledSessionFocus,
+    transitionQueries.length = 0;
+    const resumed = await transitionSessionService.resumeSession(
+      web,
+      session.id,
     );
+    expect(resumed.status).toBe("active");
+    expect(transitionQueries).toHaveLength(1);
+  });
 
-    // Cancelled session cannot be resumed or finished
+  it("rejects a second start while one is unfinished, from either surface", async () => {
+    const { goal } = await createGoalWithTasks("exclusive", []);
+    const first = await sessionService.startSession(web, {
+      goalId: goal.id,
+      timerMode: "stopwatch",
+    });
+
+    await expect(
+      sessionService.startSession(mcp, {
+        goalId: goal.id,
+        timerMode: "stopwatch",
+        intent: null,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACTIVE_SESSION_EXISTS",
+      context: { sessionId: first.id },
+    });
+
+    await sessionService.cancelSession(web, first.id);
+    const again = await sessionService.startSession(mcp, {
+      goalId: goal.id,
+      timerMode: "stopwatch",
+    });
+    expect(again.status).toBe("active");
+    await sessionService.cancelSession(web, again.id);
+  });
+
+  it("serializes start against Goal lifecycle so an archived Goal can never own a live Session", async () => {
+    const { goal } = await createGoalWithTasks("race", []);
+    const results = await Promise.allSettled([
+      sessionService.startSession(web, {
+        goalId: goal.id,
+        timerMode: "stopwatch",
+      }),
+      planningService.updateGoal(web, { id: goal.id, status: "archived" }),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    expect(fulfilled).toHaveLength(1);
+
+    const open = await pool.query(
+      `select status from sessions where goal_id = $1 and status in ('active','paused')`,
+      [goal.id],
+    );
+    if (results[0].status === "rejected") {
+      expect(results[1].status).toBe("fulfilled");
+      expect(open.rows).toHaveLength(0);
+      expect(String(results[0].reason.code ?? results[0].reason)).toMatch(
+        /GOAL_NOT_ACTIVE|INVALID/,
+      );
+    } else {
+      // Start won the race: the archive must have failed with the guard.
+      const reason = (results[1] as PromiseRejectedResult).reason;
+      expect(String(reason.code ?? reason)).toMatch(
+        /PARENT_HAS_ACTIVE_SESSION|GOAL_NOT_ACTIVE|INVALID/,
+      );
+      expect(open.rows).toHaveLength(1);
+      const live = await pool.query<{ id: string }>(
+        `select id from sessions where goal_id = $1 and status = 'active'`,
+        [goal.id],
+      );
+      if (live.rows[0]) {
+        await sessionService.cancelSession(web, live.rows[0].id);
+      }
+    }
+  });
+
+  it("validates execution targets before opening a Session", async () => {
+    const { goal, tasks } = await createGoalWithTasks("validate", ["T1"]);
+    await planningService.completeTask(web, tasks[0]!.id);
+
+    await expect(
+      sessionService.startSession(web, {
+        goalId: goal.id,
+        taskId: tasks[0]!.id,
+        timerMode: "stopwatch",
+      }),
+    ).rejects.toMatchObject({ code: "TASK_NOT_PENDING" });
+
+    const other = await createGoalWithTasks("validate-other", ["O1"]);
+    await expect(
+      sessionService.startSession(web, {
+        goalId: goal.id,
+        taskId: other.tasks[0]!.id,
+        timerMode: "stopwatch",
+      }),
+    ).rejects.toMatchObject({ code: "TASK_NOT_IN_GOAL" });
+
+    await planningService.updateGoal(web, { id: goal.id, status: "archived" });
+    await expect(
+      sessionService.startSession(web, {
+        goalId: goal.id,
+        timerMode: "stopwatch",
+      }),
+    ).rejects.toMatchObject({ code: "GOAL_NOT_ACTIVE" });
+  });
+
+  it("blocks Task and Goal lifecycle changes while their Session is unfinished", async () => {
+    const { goal, tasks } = await createGoalWithTasks("guard", ["Busy"]);
+    const session = await sessionService.startSession(web, {
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
+      timerMode: "stopwatch",
+    });
+
+    await expect(
+      planningService.completeTask(web, tasks[0]!.id),
+    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
+    await expect(
+      planningService.skipTask(web, tasks[0]!.id),
+    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
+    await expect(
+      planningService.archiveTask(web, tasks[0]!.id),
+    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
+    await expect(
+      planningService.updateGoal(web, { id: goal.id, status: "completed" }),
+    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
+
+    // Reopen (no Session attached) stays allowed during a run.
+    const other = await createGoalWithTasks("guard-other", ["Free"]);
+    await planningService.completeTask(web, other.tasks[0]!.id);
+    await planningService.reopenTask(web, other.tasks[0]!.id);
+
+    await sessionService.cancelSession(web, session.id);
+  });
+
+  it("guards note writes with content versions; stale writes never overwrite", async () => {
+    const { goal } = await createGoalWithTasks("notes", []);
+    const session = await sessionService.startSession(web, {
+      goalId: goal.id,
+      timerMode: "stopwatch",
+    });
+
+    const saved = await sessionService.updateNote(web, {
+      id: session.id,
+      note: "v1 text",
+      expectedVersion: 0,
+    });
+    expect(saved.note).toBe("v1 text");
+    expect(saved.noteVersion).toBe(1);
+
+    // An out-of-order autosave with the old version is rejected.
+    await expect(
+      sessionService.updateNote(web, {
+        id: session.id,
+        note: "stale autosave",
+        expectedVersion: 0,
+      }),
+    ).rejects.toMatchObject({
+      code: "VERSION_CONFLICT",
+      context: { currentVersion: 1 },
+    });
+
+    const [sessionRow] = (
+      await pool.query("select note from sessions where id = $1", [session.id])
+    ).rows as { note: string }[];
+    expect(sessionRow.note).toBe("v1 text");
+
+    await sessionService.updateNote(web, {
+      id: session.id,
+      note: "v2 text",
+      expectedVersion: 1,
+    });
+    await sessionService.cancelSession(web, session.id);
+  });
+
+  it("keeps the resume hint independent from finish; conflict retry recovers", async () => {
+    const { goal, tasks } = await createGoalWithTasks("hint", ["H1"]);
+    const session = await sessionService.startSession(web, {
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
+      timerMode: "stopwatch",
+    });
+    const finished = await sessionService.finishSession(web, session.id, {
+      note: "done",
+      noteExpectedVersion: 0,
+    });
+    expect(finished.status).toBe("completed");
+
+    // Hint can still be saved after finish — its failure must never undo time.
+    const hinted = await sessionService.updateResumeHint(web, {
+      id: session.id,
+      resumeHint: "下次先补第二段例子",
+      expectedVersion: 0,
+    });
+    expect(hinted.resumeHint).toBe("下次先补第二段例子");
+    expect(hinted.resumeHintVersion).toBe(1);
+
+    // Conflict → rebase with the fresh version.
+    await expect(
+      sessionService.updateResumeHint(web, {
+        id: session.id,
+        resumeHint: "stale",
+        expectedVersion: 0,
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    const rebased = await sessionService.updateResumeHint(web, {
+      id: session.id,
+      resumeHint: null,
+      expectedVersion: 1,
+    });
+    expect(rebased.resumeHint).toBeNull();
+  });
+
+  it("cancels as a kept-but-excluded record and frees the exclusivity slot", async () => {
+    const { goal } = await createGoalWithTasks("cancel", []);
+    const session = await sessionService.startSession(web, {
+      goalId: goal.id,
+      timerMode: "stopwatch",
+    });
+    await sessionService.cancelSession(web, session.id);
+    // Idempotent cancel.
+    await sessionService.cancelSession(web, session.id);
+
+    const cancelledRow = await pool.query<{ status: string }>(
+      "select status from sessions where id = $1",
+      [session.id],
+    );
+    expect(cancelledRow.rows[0]?.status).toBe("cancelled");
+    expect(await sessionService.getActiveSession(web)).toBeNull();
+
     await expect(
       sessionService.resumeSession(web, session.id),
-    ).rejects.toMatchObject({
-      code: "INVALID_SESSION_STATE",
-    });
-
-    await expect(
-      sessionService.finishSession(web, session.id),
-    ).rejects.toMatchObject({
-      code: "INVALID_SESSION_STATE",
-    });
-
-    // Immediately start another session succeeds without ACTIVE_SESSION_EXISTS
-    const nextSession = await sessionService.startSession(web, {
-      trackId: track.id,
-    });
-    expect(nextSession.status).toBe("active");
-    await sessionService.cancelSession(web, nextSession.id);
+    ).rejects.toMatchObject({ code: "INVALID_SESSION_STATE" });
   });
 
-  it("logs and corrects manual history with idempotency, overlap confirmation, pagination, and shared stats", async () => {
-    const { track } = await createPlan("manual-history");
-    const [task] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Historical task" }],
+  it("preserves a zero-duration record without counting it as effective work", async () => {
+    await settingsService.update(web, {
+      timezone: "UTC",
+      weekStartsOn: 1,
     });
+    const before = await statisticsService.getStatistics(web, {
+      period: "today",
+    });
+
+    const goal = await planningService.createGoal(web, { title: "Zero" });
+    const sessionId = randomUUID();
+    const now = new Date();
+    await pool.query(
+      `insert into sessions (id, goal_id, status, entry_mode, created_via, timer_mode, time_basis, started_at, ended_at, duration_seconds)
+       values ($1, $2, 'completed', 'timer', 'web', 'stopwatch', 'observed', $3, $3, 0)`,
+      [sessionId, goal.id, now],
+    );
+
+    const stats = await statisticsService.getStatistics(web, {
+      period: "today",
+    });
+    expect(stats.totalFocusSeconds).toBe(before.totalFocusSeconds);
+    expect(stats.sessionCount).toBe(before.sessionCount);
+
+    const page = await historyService.listSessions(web, {});
+    expect(page.items.map(({ id }) => id)).toContain(sessionId);
+  });
+});
+
+describe("dashboard resolution and resume hints", () => {
+  const web = { actor: "web" } as const;
+
+  async function createGoalWithTasks(label: string, titles: string[]) {
+    const goal = await planningService.createGoal(web, {
+      title: `Goal ${label}`,
+    });
+    const tasks = titles.length
+      ? await planningService.createTasks(web, {
+          goalId: goal.id,
+          tasks: titles.map((title) => ({ title })),
+        })
+      : [];
+    return { goal, tasks };
+  }
+
+  async function runFinishedSession(input: {
+    goalId: string;
+    taskId?: string | null;
+    durationSeconds?: number;
+    resumeHint?: string | null;
+    /** Minutes before now the Session ended; keeps recency deterministic. */
+    endedMinutesAgo?: number;
+  }) {
+    const duration = input.durationSeconds ?? 120;
+    const endedAt = input.endedMinutesAgo
+      ? new Date(Date.now() - input.endedMinutesAgo * 60_000)
+      : new Date();
+    const sessionId = randomUUID();
+    await pool.query(
+      `insert into sessions (id, goal_id, task_id, status, entry_mode, created_via, timer_mode, time_basis, started_at, ended_at, duration_seconds, resume_hint)
+       values ($1, $2, $3, 'completed', 'timer', 'web', 'stopwatch', 'observed', $4, $5, $6, $7)`,
+      [
+        sessionId,
+        input.goalId,
+        input.taskId ?? null,
+        new Date(endedAt.getTime() - duration * 1000),
+        endedAt,
+        duration,
+        input.resumeHint ?? null,
+      ],
+    );
+    // Matching focus interval so the stats see real observed time.
+    await pool.query(
+      `insert into focus_intervals (session_id, phase, started_at, ended_at)
+       values ($1, 'focus', $2, $3)`,
+      [sessionId, new Date(endedAt.getTime() - duration * 1000), endedAt],
+    );
+    return sessionId;
+  }
+
+  it("falls back through the §5.2 rules and serves the scoped resume hint", async () => {
+    // Rule 5: no selection, no history → first active Goal, first pending.
+    const empty = await createGoalWithTasks("first", ["A", "B"]);
+    const first = await dashboardService.getDashboard(web);
+    expect(first.selection?.goal.id).toBe(empty.goal.id);
+    expect(first.selection?.task?.id).toBe(empty.tasks[0]!.id);
+    expect(first.resumeHint).toBeNull();
+
+    // Build history on a second, newer Goal.
+    const recent = await createGoalWithTasks("recent", ["R1", "R2"]);
+    const stale = await createGoalWithTasks("stale", ["S1"]);
+    await runFinishedSession({
+      goalId: stale.goal.id,
+      taskId: stale.tasks[0]!.id,
+      resumeHint: "旧目标的提示",
+      endedMinutesAgo: 60,
+    });
+    await runFinishedSession({
+      goalId: recent.goal.id,
+      taskId: recent.tasks[0]!.id,
+      resumeHint: "下次从 R1 的第二步继续",
+    });
+
+    // Rule 4: most recent effective Session wins over the first Goal.
+    const dashboard = await dashboardService.getDashboard(web);
+    expect(dashboard.selection?.goal.id).toBe(recent.goal.id);
+    expect(dashboard.selection?.task?.id).toBe(recent.tasks[0]!.id);
+    expect(dashboard.selection?.reason).toBe("recent-goal");
+    expect(dashboard.resumeHint).toBe("下次从 R1 的第二步继续");
+
+    // The latest record's cleared hint is NOT resurrected from older ones.
+    const latestId = await runFinishedSession({
+      goalId: recent.goal.id,
+      taskId: recent.tasks[0]!.id,
+    });
+    void latestId;
+    await pool.query(
+      "update sessions set resume_hint = null where goal_id = $1",
+      [recent.goal.id],
+    );
+    const cleared = await dashboardService.getDashboard(web);
+    expect(cleared.resumeHint).toBeNull();
+
+    // Rule 2: an explicit stored selection beats recent history.
+    await selectionService.set(web, {
+      goalId: empty.goal.id,
+      taskId: empty.tasks[1]!.id,
+    });
+    const explicit = await dashboardService.getDashboard(web);
+    expect(explicit.selection?.goal.id).toBe(empty.goal.id);
+    expect(explicit.selection?.task?.id).toBe(empty.tasks[1]!.id);
+    expect(explicit.selection?.reason).toBe("explicit-selection");
+    // A Task-scoped hint only reads that Task's records.
+    expect(explicit.resumeHint).toBeNull();
+
+    // Rule 1: an unfinished Session takes over entirely.
+    const session = await sessionService.startSession(web, {
+      goalId: recent.goal.id,
+      taskId: recent.tasks[1]!.id,
+      timerMode: "stopwatch",
+    });
+    const running = await dashboardService.getDashboard(web);
+    expect(running.activeSession?.id).toBe(session.id);
+    expect(running.selection?.task?.id).toBe(recent.tasks[1]!.id);
+    expect(running.selection?.reason).toBe("active-session");
+    expect(running.resumeHint).toBeNull();
+    await sessionService.cancelSession(web, session.id);
+  });
+
+  it("summarizes today from real intervals and active goals", async () => {
+    await settingsService.update(web, { timezone: "UTC", weekStartsOn: 1 });
+    const { goal, tasks } = await createGoalWithTasks("summary", ["T"]);
+    await runFinishedSession({
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
+      durationSeconds: 300,
+    });
+
+    const dashboard = await dashboardService.getDashboard(web);
+    expect(dashboard.todayStats.totalFocusSeconds).toBe(300);
+    expect(dashboard.todayStats.sessionCount).toBe(1);
+    expect(dashboard.goals.map((item) => item.goal.id)).toContain(goal.id);
+    expect(dashboard.todos.map((task) => task.id)).toContain(tasks[0]!.id);
+    expect(dashboard.serverNow).toBeTruthy();
+  });
+});
+
+describe("history service and statistics", () => {
+  const web = { actor: "web" } as const;
+  const mcp = { actor: "mcp" } as const;
+
+  async function createGoalWithTasks(label: string, titles: string[]) {
+    const goal = await planningService.createGoal(web, {
+      title: `Goal ${label}`,
+    });
+    const tasks = titles.length
+      ? await planningService.createTasks(web, {
+          goalId: goal.id,
+          tasks: titles.map((title) => ({ title })),
+        })
+      : [];
+    return { goal, tasks };
+  }
+
+  it("logs manual records with idempotency, overlap confirmation, and corrections", async () => {
+    const { goal, tasks } = await createGoalWithTasks("manual", ["Historic"]);
     const key = `manual-${randomUUID()}`;
     const firstInput = {
-      trackId: track.id,
-      taskId: task!.id,
+      goalId: goal.id,
+      taskId: tasks[0]!.id,
       durationSeconds: 3600,
       endedAt: "2026-06-01T11:00:00.000Z",
       idempotencyKey: key,
     };
 
     const first = await historyService.logSession(web, firstInput);
+    expect(first.timeBasis).toBe("manual");
+    expect(first.entryMode).toBe("manual");
     const replay = await historyService.logSession(mcp, firstInput);
     expect(replay.id).toBe(first.id);
 
-    const adjacent = await historyService.logSession(web, {
-      trackId: track.id,
+    await historyService.logSession(web, {
+      goalId: goal.id,
       durationSeconds: 3600,
       endedAt: "2026-06-01T12:00:00.000Z",
     });
     await expect(
       historyService.logSession(web, {
-        trackId: track.id,
+        goalId: goal.id,
         durationSeconds: 3600,
         endedAt: "2026-06-01T11:30:00.000Z",
       }),
     ).rejects.toMatchObject({ code: "SESSION_TIME_OVERLAP" });
     const overlapping = await historyService.logSession(mcp, {
-      trackId: track.id,
+      goalId: goal.id,
       durationSeconds: 3600,
       endedAt: "2026-06-01T11:30:00.000Z",
       allowOverlap: true,
     });
 
-    const firstPage = await historyService.listSessions(web, {
-      from: "2026-06-01T00:00:00.000Z",
-      to: "2026-06-02T00:00:00.000Z",
-      limit: 2,
-    });
-    const secondPage = await historyService.listSessions(web, {
-      from: "2026-06-01T00:00:00.000Z",
-      to: "2026-06-02T00:00:00.000Z",
-      cursor: firstPage.nextCursor!,
-      limit: 2,
-    });
-    expect(firstPage.items).toHaveLength(2);
-    expect(secondPage.items).toHaveLength(1);
-    expect(
-      new Set([...firstPage.items, ...secondPage.items].map(({ id }) => id))
-        .size,
-    ).toBe(3);
-
-    const { track: otherTrack } = await createPlan("manual-other-track");
+    // Corrections: ownership must stay consistent; time edits switch the
+    // basis to corrected while the record stays manual-created.
+    const other = await createGoalWithTasks("manual-other", ["O"]);
     await expect(
       historyService.updateSession(web, {
         id: first.id,
-        trackId: otherTrack.id,
+        goalId: other.goal.id,
+        taskId: tasks[0]!.id,
       }),
-    ).rejects.toMatchObject({ code: "TASK_NOT_IN_TRACK" });
+    ).rejects.toMatchObject({ code: "TASK_NOT_IN_GOAL" });
     const corrected = await historyService.updateSession(web, {
       id: first.id,
-      trackId: otherTrack.id,
+      goalId: other.goal.id,
       taskId: null,
       startedAt: "2026-06-01T09:00:00.000Z",
       endedAt: "2026-06-01T10:00:00.000Z",
       note: "Corrected",
     });
     expect(corrected).toMatchObject({
-      entryMode: "manual",
+      timeBasis: "corrected",
       createdVia: "web",
       durationSeconds: 3600,
       note: "Corrected",
     });
 
-    const stats = await statisticsService.getStatistics(web, {
-      period: "custom",
-      from: "2026-06-01T09:00:00.000Z",
-      to: "2026-06-01T12:00:00.000Z",
-      now: "2026-06-01T12:00:00.000Z",
-    });
-    expect(stats.totalFocusSeconds).toBe(10_800);
-    expect(stats.sessionCount).toBe(3);
-    expect(stats.focusDays).toBe(1);
-    expect(stats.byTrack.map(({ title }) => title)).toContain(otherTrack.title);
-
-    await sessionService.cancelSession(web, overlapping.id);
-    const defaultHistory = await historyService.listSessions(web, {
-      from: "2026-06-01T00:00:00.000Z",
-      to: "2026-06-02T00:00:00.000Z",
-    });
-    expect(defaultHistory.items.map(({ id }) => id)).not.toContain(
-      overlapping.id,
-    );
-    const auditHistory = await historyService.listSessions(web, {
-      from: "2026-06-01T00:00:00.000Z",
-      to: "2026-06-02T00:00:00.000Z",
-      includeCancelled: true,
-    });
-    expect(auditHistory.items.map(({ id }) => id)).toContain(overlapping.id);
-    expect(adjacent.status).toBe("completed");
+    // Manual logs and corrections never take over the selection.
+    expect(await selectionService.getStored(web)).toBeNull();
+    void overlapping;
   });
 
   it("serializes concurrent overlap checks so only one unconfirmed record is written", async () => {
-    const { track } = await createPlan("manual-concurrency");
+    const { goal } = await createGoalWithTasks("manual-concurrency", []);
     const input = {
-      trackId: track.id,
+      goalId: goal.id,
       durationSeconds: 1800,
       endedAt: "2026-07-01T10:00:00.000Z",
     };
@@ -705,242 +911,272 @@ describe("session service and focus execution loop", () => {
     );
   });
 
-  it("atomic finish review completes task and advances Current Next", async () => {
-    const { track } = await createPlan("review-advance");
-    const [task1, task2] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Task 1" }, { title: "Task 2" }],
-    });
+  it("computes statistics from observed intervals and corrected declarations", async () => {
+    await settingsService.update(web, { timezone: "UTC", weekStartsOn: 1 });
+    const { goal } = await createGoalWithTasks("stats", []);
 
-    // Initially task 1 is Current Next
-    const initialNext = await planningService.getNextForTrack(web, track.id);
-    expect((initialNext as { id: string })?.id).toBe(task1!.id);
-
-    // Start session on task 1
-    const session = await sessionService.startSession(web, {
-      trackId: track.id,
-      taskId: task1!.id,
-    });
-
-    // Review with outcome: completed
-    const result = await sessionService.finishSessionReview(web, {
-      sessionId: session.id,
-      outcome: "completed",
-      note: "Finished task 1 cleanly",
-    });
-
-    expect(result.session.status).toBe("completed");
-    expect(result.task?.status).toBe("completed");
-    expect(result.task?.completedAt).not.toBeNull();
-    // Next task advanced to Task 2!
-    expect(result.nextTask?.id).toBe(task2!.id);
-
-    const freshNext = await planningService.getNextForTrack(web, track.id);
-    expect((freshNext as { id: string })?.id).toBe(task2!.id);
-
-    // Repeated finish review does not double-advance
-    const repeatResult = await sessionService.finishSessionReview(web, {
-      sessionId: session.id,
-      outcome: "completed",
-    });
-    expect(repeatResult.nextTask?.id).toBe(task2!.id);
-  });
-
-  it("atomic finish review skips task and advances Current Next", async () => {
-    const { track } = await createPlan("review-skip");
-    const [task1, task2] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Task 1" }, { title: "Task 2" }],
-    });
-
-    const session = await sessionService.startSession(web, {
-      trackId: track.id,
-      taskId: task1!.id,
-    });
-
-    const result = await sessionService.finishSessionReview(web, {
-      sessionId: session.id,
-      outcome: "skip",
-    });
-
-    expect(result.session.status).toBe("completed");
-    expect(result.task?.status).toBe("skipped");
-    expect(result.nextTask?.id).toBe(task2!.id);
-  });
-
-  it("atomic finish review with continue_later leaves task pending and keeps Current Next", async () => {
-    const { track } = await createPlan("review-continue");
-    const [task1] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Task 1" }],
-    });
-
-    const session = await sessionService.startSession(web, {
-      trackId: track.id,
-      taskId: task1!.id,
-    });
-
-    const result = await sessionService.finishSessionReview(web, {
-      sessionId: session.id,
-      outcome: "continue_later",
-    });
-
-    expect(result.session.status).toBe("completed");
-    expect(result.task?.status).toBe("pending");
-    expect(result.nextTask?.id).toBe(task1!.id);
-  });
-
-  it("creates, lists, updates, and archives distractions and saves session note", async () => {
-    const { track } = await createPlan("distraction-flow");
-    const session = await sessionService.startSession(web, {
-      trackId: track.id,
-    });
-
-    // Update note
-    const withNote = await sessionService.updateSessionNote(
-      web,
-      session.id,
-      "Live thoughts",
+    // Observed: 09:00–10:00 with a 10-minute pause in the middle.
+    const observedId = randomUUID();
+    await pool.query(
+      `insert into sessions (id, goal_id, status, entry_mode, created_via, timer_mode, time_basis, started_at, ended_at, duration_seconds)
+       values ($1, $2, 'completed', 'timer', 'web', 'stopwatch', 'observed', $3, $4, $5)`,
+      [
+        observedId,
+        goal.id,
+        "2026-06-01T09:00:00Z",
+        "2026-06-01T10:00:00Z",
+        3000,
+      ],
     );
-    expect(withNote.note).toBe("Live thoughts");
-
-    // Create distraction defaulting to active session
-    const d1 = await distractionService.createDistraction(web, {
-      text: "Phone notification",
-    });
-    expect(d1.sessionId).toBe(session.id);
-    expect(d1.text).toBe("Phone notification");
-
-    // Create distraction with empty text
-    const d2 = await distractionService.createDistraction(web, {});
-    expect(d2.sessionId).toBe(session.id);
-    expect(d2.text).toBeNull();
-
-    // List distractions
-    const list = await distractionService.listDistractions(web, {
-      sessionId: session.id,
-    });
-    expect(list).toHaveLength(2);
-
-    // Update distraction
-    const updatedD1 = await distractionService.updateDistraction(web, d1.id, {
-      text: "Phone call from boss",
-    });
-    expect(updatedD1.text).toBe("Phone call from boss");
-
-    // Archive distraction
-    const archived = await distractionService.archiveDistraction(web, d1.id);
-    expect(archived.archivedAt).not.toBeNull();
-
-    // Default list excludes archived
-    const listExcludingArchived = await distractionService.listDistractions(
-      web,
-      {
-        sessionId: session.id,
-      },
+    await pool.query(
+      `insert into focus_intervals (session_id, phase, started_at, ended_at)
+       values ($1, 'focus', $2, $3), ($1, 'focus', $4, $5)`,
+      [
+        observedId,
+        "2026-06-01T09:00:00Z",
+        "2026-06-01T09:30:00Z",
+        "2026-06-01T09:40:00Z",
+        "2026-06-01T10:00:00Z",
+      ],
     );
-    expect(listExcludingArchived).toHaveLength(1);
-    expect(listExcludingArchived[0]?.id).toBe(d2.id);
 
-    // Explicit includeArchived: true includes archived
-    const listWithArchived = await distractionService.listDistractions(web, {
-      sessionId: session.id,
-      includeArchived: true,
-    });
-    expect(listWithArchived).toHaveLength(2);
-
-    await sessionService.cancelSession(web, session.id);
-  });
-
-  it("computes dashboard with fallback focus track selection and today statistics", async () => {
-    const { track } = await createPlan("dashboard-test");
-    await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "Dashboard Task" }],
-    });
-
-    // Explicitly set selectedTrack
-    await settingsService.setSelectedTrack(web, track.id);
-
-    const dashboard = await dashboardService.getDashboard(web);
-    expect(dashboard.selectedTrack?.track.id).toBe(track.id);
-    expect(dashboard.selectedTrack?.currentNextTask?.title).toBe(
-      "Dashboard Task",
+    // Manual: 10:00–11:00 declared 45 effective minutes.
+    const manualId = randomUUID();
+    await pool.query(
+      `insert into sessions (id, goal_id, status, entry_mode, created_via, timer_mode, time_basis, started_at, ended_at, duration_seconds)
+       values ($1, $2, 'completed', 'manual', 'web', 'stopwatch', 'manual', $3, $4, $5)`,
+      [manualId, goal.id, "2026-06-01T10:00:00Z", "2026-06-01T11:00:00Z", 2700],
     );
-    expect(dashboard.todayStats).toBeDefined();
-    expect(dashboard.activeTracks.length).toBeGreaterThan(0);
-  });
 
-  it("MCP server tools provide complete parity with domain errors and structured content", async () => {
-    const { track } = await createPlan("mcp-parity");
-    const [task] = await planningService.createTasks(web, {
-      trackId: track.id,
-      tasks: [{ title: "MCP Task" }],
+    // Cancelled intervals never count.
+    const cancelledId = randomUUID();
+    await pool.query(
+      `insert into sessions (id, goal_id, status, entry_mode, created_via, timer_mode, time_basis, started_at, ended_at, duration_seconds)
+       values ($1, $2, 'cancelled', 'timer', 'web', 'stopwatch', 'observed', $3, $4, $5)`,
+      [
+        cancelledId,
+        goal.id,
+        "2026-06-01T11:00:00Z",
+        "2026-06-01T12:00:00Z",
+        3600,
+      ],
+    );
+
+    const stats = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-06-01T08:00:00Z",
+      to: "2026-06-01T12:00:00Z",
+      now: "2026-06-01T12:00:00Z",
+    });
+    expect(stats.totalFocusSeconds).toBe(3000 + 2700);
+    expect(stats.sessionCount).toBe(2);
+    expect(stats.focusDays).toBe(1);
+    expect(stats.byGoal[0]).toMatchObject({
+      goalId: goal.id,
+      focusSeconds: 3000 + 2700,
     });
 
-    // Verify MCP Server instance registers session tools
-    const server = createTimeOsMcpServer({
+    // Correcting the observed record switches it to the corrected basis:
+    // the original intervals stay, the declared value wins.
+    await historyService.updateSession(web, {
+      id: observedId,
+      durationSeconds: 1800,
+    });
+    const corrected = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-06-01T08:00:00Z",
+      to: "2026-06-01T12:00:00Z",
+      now: "2026-06-01T12:00:00Z",
+    });
+    expect(corrected.totalFocusSeconds).toBe(1800 + 2700);
+  });
+});
+
+describe("MCP server over the real protocol", () => {
+  const web = { actor: "web" } as const;
+
+  const handler = createMcpHandler(() =>
+    createTimeOsMcpServer({
       settingsService,
       planningService,
+      selectionService,
       sessionService,
       distractionService,
       dashboardService,
       historyService,
       statisticsService,
+    }),
+  );
+
+  let nextId = 1;
+  async function rpc(
+    method: string,
+    params?: unknown,
+  ): Promise<{
+    result?: Record<string, unknown>;
+    error?: { code: number; message: string };
+  }> {
+    const response = await handler.fetch(
+      new Request("http://localhost/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: nextId++,
+          method,
+          params,
+        }),
+      }),
+    );
+    const text = await response.text();
+    if (response.headers.get("content-type")?.includes("text/event-stream")) {
+      const dataLine = text
+        .split("\n")
+        .filter((line: string) => line.startsWith("data:"))
+        .at(-1);
+      return JSON.parse(dataLine!.slice("data:".length).trim());
+    }
+    return JSON.parse(text);
+  }
+
+  async function callTool(name: string, args: unknown = {}) {
+    const response = await rpc("tools/call", { name, arguments: args });
+    if (response.error) {
+      throw new Error(`Protocol error: ${JSON.stringify(response.error)}`);
+    }
+    const result = response.result as {
+      isError?: boolean;
+      structuredContent?: { ok: boolean; error?: { code: string } };
+    };
+    expect(result.structuredContent).toBeDefined();
+    return result.structuredContent!;
+  }
+
+  it("walks initialize → tools/list → session tools with Web interleaving", async () => {
+    const init = await rpc("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "integration-test", version: "1.0.0" },
     });
-    expect(server).toBeDefined();
+    expect(init.result).toBeDefined();
+    const { serverInfo } = init.result as { serverInfo?: { name?: string } };
+    expect(serverInfo?.name).toBe("time-os");
 
-    // Start session via sessionContract
-    const startResult = await sessionContract(() =>
-      sessionService.startSession(mcp, {
-        trackId: track.id,
-        taskId: task!.id,
-      }),
-    );
-    expect(startResult.ok).toBe(true);
-    if (!startResult.ok) return;
-
-    const sessionId = startResult.data.id;
-
-    // Get active session via MCP contract
-    const activeResult = await sessionContract(() =>
-      sessionService.getActiveSession(mcp),
-    );
-    expect(activeResult.ok).toBe(true);
-    if (activeResult.ok) {
-      expect(activeResult.data?.id).toBe(sessionId);
+    const listed = await rpc("tools/list", {});
+    const names = (
+      (listed.result as { tools: { name: string }[] }).tools ?? []
+    ).map((tool) => tool.name);
+    for (const required of [
+      "dashboard_get",
+      "selection_set",
+      "selection_clear",
+      "goals_list",
+      "goal_create",
+      "tasks_list",
+      "tasks_create",
+      "task_complete",
+      "session_start",
+      "session_pause",
+      "session_resume",
+      "session_finish",
+      "session_cancel",
+      "session_note_update",
+      "session_resume_hint_update",
+      "sessions_list",
+      "session_log",
+      "session_update",
+      "stats_get",
+    ]) {
+      expect(names).toContain(required);
+    }
+    // Track / Current-Next registrations are gone.
+    for (const banned of ["track_create", "next_get", "next_set"]) {
+      expect(names).not.toContain(banned);
     }
 
-    // Log distraction via MCP contract
-    const distResult = await sessionContract(() =>
-      distractionService.createDistraction(mcp, {
-        sessionId,
-        text: "Urgent Slack",
-      }),
-    );
-    expect(distResult.ok).toBe(true);
+    // MCP creates a Goal + Task, starts a goal-only Session.
+    const goalCreate = await callTool("goal_create", {
+      title: "MCP 创建的目标",
+    });
+    expect(goalCreate.ok).toBe(true);
+    const goalId = (goalCreate as unknown as { data: { id: string } }).data.id;
+    await callTool("tasks_create", {
+      goalId,
+      tasks: [{ title: "MCP Task" }],
+    });
 
-    // Finish review via MCP contract
-    const finishResult = await sessionContract(() =>
-      sessionService.finishSessionReview(mcp, {
-        sessionId,
-        outcome: "completed",
-        note: "Completed via MCP",
-      }),
+    const start = await callTool("session_start", {
+      goalId,
+      timerMode: "stopwatch",
+    });
+    expect(start.ok).toBe(true);
+    const sessionId = (start as unknown as { data: { id: string } }).data.id;
+    expect((start as unknown as { data: { goalId: string } }).data.goalId).toBe(
+      goalId,
     );
-    expect(finishResult.ok).toBe(true);
-    if (finishResult.ok) {
-      expect(finishResult.data.session.status).toBe("completed");
-      expect(finishResult.data.task?.status).toBe("completed");
-    }
 
-    // Dashboard get via MCP contract
-    const dashResult = await sessionContract(() =>
-      dashboardService.getDashboard(mcp),
-    );
-    expect(dashResult.ok).toBe(true);
-    if (dashResult.ok) {
-      expect(dashResult.data.todayStats.completedTasksCount).toBeGreaterThan(0);
-    }
+    // 运行中睡 1.1 秒，让时长真实超过 1 秒（零时长不计有效次数）。
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    // Web pauses; MCP reads the paused state back.
+    const paused = await sessionService.pauseSession(web, sessionId);
+    expect(paused.status).toBe("paused");
+    const mcpActive = await callTool("session_get_active", {});
+    expect(
+      (mcpActive as unknown as { data: { status: string } }).data.status,
+    ).toBe("paused");
+
+    // Web finishes; the MCP note update on a completed Session still works.
+    const finished = await sessionService.finishSession(web, sessionId, {});
+    expect(finished.status).toBe("completed");
+    const hint = await callTool("session_resume_hint_update", {
+      id: sessionId,
+      resumeHint: "MCP 留下的接续提示",
+      expectedVersion: 0,
+    });
+    expect(hint.ok).toBe(true);
+
+    const dash = await callTool("dashboard_get", {});
+    expect(dash.ok).toBe(true);
+    const dashData = dash as unknown as {
+      data: {
+        selection: { goal: { id: string }; reason: string };
+        resumeHint: string | null;
+        todayStats: { sessionCount: number };
+      };
+    };
+    expect(dashData.data.selection.goal.id).toBe(goalId);
+    // start 同步过选择：finish 后选择仍指向该 Goal（rule 2 explicit），
+    // goal-only 上下文读取同 Goal 的 goal-only 接续提示。
+    expect(dashData.data.selection.reason).toBe("explicit-selection");
+    expect(dashData.data.resumeHint).toBe("MCP 留下的接续提示");
+    expect(dashData.data.todayStats.sessionCount).toBe(1);
+
+    // The legacy trackId input is rejected, not silently ignored: the
+    // strict input schema surfaces an explicit tool error.
+    const legacy = await rpc("tools/call", {
+      name: "session_start",
+      arguments: { trackId: goalId, goalId, timerMode: "stopwatch" },
+    });
+    const legacyResult = legacy.result as unknown as {
+      isError?: boolean;
+      content?: { text?: string }[];
+    };
+    expect(legacyResult.isError).toBe(true);
+    expect(legacyResult.content?.[0]?.text ?? "").toMatch(/trackId/i);
+
+    // Domain errors come back as structured results on the MCP surface.
+    const conflict = await callTool("session_resume_hint_update", {
+      id: sessionId,
+      resumeHint: "stale",
+      expectedVersion: 0,
+    });
+    expect(conflict.ok).toBe(false);
+    expect(
+      (conflict as unknown as { error: { code: string } }).error.code,
+    ).toBe("VERSION_CONFLICT");
   });
 });

@@ -27,7 +27,6 @@ function refreshHistory() {
   revalidatePath("/history");
   revalidatePath("/today");
   revalidatePath("/goals");
-  revalidatePath("/tracks/[id]", "page");
 }
 
 function parseHistoryTime(value: string, timezone: string): string {
@@ -56,7 +55,7 @@ export async function getHistorySessionAction(
 }
 
 export async function logSessionAction(input: {
-  trackId: string;
+  goalId: string;
   taskId?: string | null;
   durationMinutes: number;
   endedAtLocal?: string;
@@ -67,7 +66,7 @@ export async function logSessionAction(input: {
   return run(async () => {
     const settings = await settingsService.get(context);
     return historyService.logSession(context, {
-      trackId: input.trackId,
+      goalId: input.goalId,
       taskId: input.taskId,
       durationSeconds: Math.round(input.durationMinutes * 60),
       endedAt: input.endedAtLocal
@@ -82,25 +81,27 @@ export async function logSessionAction(input: {
 
 export async function updateHistorySessionAction(input: {
   id: string;
-  trackId?: string;
+  goalId?: string;
   taskId?: string | null;
   startedAtLocal?: string;
   endedAtLocal?: string;
-  plannedMinutes?: number | null;
   note?: string | null;
   allowOverlap?: boolean;
 }): Promise<Result<Session>> {
   return run(async () => {
     const settings = await settingsService.get(context);
-    const { startedAtLocal, endedAtLocal, ...historyInput } = input;
     return historyService.updateSession(context, {
-      ...historyInput,
-      startedAt: startedAtLocal
-        ? parseHistoryTime(startedAtLocal, settings.timezone)
+      id: input.id,
+      goalId: input.goalId,
+      taskId: input.taskId,
+      startedAt: input.startedAtLocal
+        ? parseHistoryTime(input.startedAtLocal, settings.timezone)
         : undefined,
-      endedAt: endedAtLocal
-        ? parseHistoryTime(endedAtLocal, settings.timezone)
+      endedAt: input.endedAtLocal
+        ? parseHistoryTime(input.endedAtLocal, settings.timezone)
         : undefined,
+      note: input.note,
+      allowOverlap: input.allowOverlap,
     });
   });
 }

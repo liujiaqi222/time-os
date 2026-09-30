@@ -2,10 +2,11 @@ import { and, eq, gt, inArray, isNotNull, lt, ne, or, sql } from "drizzle-orm";
 
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
-import { sessions, tasks, tracks } from "@/db/schema";
+import { goals, sessions, tasks } from "@/db/schema";
 import {
-  computeFocusIntervals,
+  computeFocusTotals,
   focusSecondsInRange,
+  type SessionFocusSlice,
 } from "@/shared/focus-intervals";
 import {
   statsQuerySchema,
@@ -18,10 +19,18 @@ import {
   localDateStart,
 } from "@/shared/timezone";
 import { invalid, parsed } from "@/services/service-kit";
+import { intervalsOfSessions } from "@/services/history";
 import type { SettingsService } from "@/services/settings";
 
-export interface TrackStatistics {
-  trackId: string;
+/**
+ * Focus statistics (PRD §7.2). Today, History and stats_get all flow
+ * through this one implementation: observed Sessions count their real
+ * focus intervals; manual / corrected Sessions apportion the declared
+ * duration; cancelled Sessions never contribute.
+ */
+
+export interface GoalStatistics {
+  goalId: string;
   title: string;
   status: "active" | "completed" | "archived";
   focusSeconds: number;
@@ -38,7 +47,7 @@ export interface Statistics {
   sessionCount: number;
   completedTaskCount: number;
   focusDays: number;
-  byTrack: TrackStatistics[];
+  byGoal: GoalStatistics[];
 }
 
 export interface StatisticsService {
@@ -91,9 +100,9 @@ export function createStatisticsService(
 
       const [sessionRows, completedTaskRows] = await Promise.all([
         database
-          .select({ session: sessions, track: tracks })
+          .select({ session: sessions, goal: goals })
           .from(sessions)
-          .innerJoin(tracks, eq(sessions.trackId, tracks.id))
+          .innerJoin(goals, eq(sessions.goalId, goals.id))
           .where(
             and(
               ne(sessions.status, "cancelled"),
@@ -118,23 +127,42 @@ export function createStatisticsService(
           ),
       ]);
 
-      const sessionSlices = sessionRows.map((row) => row.session);
-      const totals = computeFocusIntervals(sessionSlices, range, now);
-      const sessionCount = sessionSlices.filter(
-        (session) => focusSecondsInRange(session, range, now) > 0,
+      // Real focus intervals for every observed Session in range — one
+      // extra round trip, then pure interval math.
+      const observedIds = sessionRows
+        .filter((row) => row.session.timeBasis === "observed")
+        .map((row) => row.session.id);
+      const intervalMap = await intervalsOfSessions(database, observedIds);
+
+      const slices: (SessionFocusSlice & {
+        goalTitle: string;
+        goalStatus: GoalStatistics["status"];
+      })[] = sessionRows.map((row) => ({
+        id: row.session.id,
+        goalId: row.session.goalId,
+        status: row.session.status,
+        timeBasis: row.session.timeBasis,
+        startedAt: row.session.startedAt,
+        endedAt: row.session.endedAt,
+        durationSeconds: row.session.durationSeconds,
+        intervals: intervalMap.get(row.session.id) ?? [],
+        goalTitle: row.goal.title,
+        goalStatus: row.goal.status,
+      }));
+
+      const totals = computeFocusTotals(slices, range, now);
+      const sessionCount = slices.filter(
+        (slice) => focusSecondsInRange(slice, range, now) > 0,
       ).length;
 
-      const trackById = new Map(
-        sessionRows.map((row) => [row.track.id, row.track]),
-      );
-      const byTrack = [...totals.trackFocusSeconds.entries()]
+      const byGoal = [...totals.goalFocusSeconds.entries()]
         .filter(([, focusSeconds]) => focusSeconds > 0)
-        .map(([trackId, focusSeconds]) => {
-          const track = trackById.get(trackId)!;
+        .map(([goalId, focusSeconds]) => {
+          const row = slices.find((slice) => slice.goalId === goalId)!;
           return {
-            trackId,
-            title: track.title,
-            status: track.status,
+            goalId,
+            title: row.goalTitle,
+            status: row.goalStatus,
             focusSeconds,
           };
         })
@@ -153,8 +181,7 @@ export function createStatisticsService(
         };
         if (
           clipped.start < clipped.end &&
-          computeFocusIntervals(sessionSlices, clipped, now).totalFocusSeconds >
-            0
+          computeFocusTotals(slices, clipped, now).totalFocusSeconds > 0
         ) {
           focusDays += 1;
         }
@@ -168,7 +195,7 @@ export function createStatisticsService(
         sessionCount,
         completedTaskCount: Number(completedTaskRows[0]?.count ?? 0),
         focusDays,
-        byTrack,
+        byGoal,
       };
     },
   };

@@ -12,14 +12,13 @@ export type SettingsFormState =
   { status: "error" | "success"; message: string } | undefined;
 
 export async function saveSettingsAction(
-  _previousState: SettingsFormState,
+  _previous_state: SettingsFormState,
   formData: FormData,
 ): Promise<SettingsFormState> {
   if (!(await readWebSession())) redirect("/login");
 
   const parsed = updateSettingsSchema.safeParse({
     timezone: formData.get("timezone"),
-    defaultFocusMinutes: formData.get("defaultFocusMinutes"),
     weekStartsOn: formData.get("weekStartsOn"),
   });
   if (!parsed.success) {

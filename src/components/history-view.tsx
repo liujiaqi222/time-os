@@ -19,13 +19,13 @@ import type {
 } from "@/services/history";
 import type { Statistics } from "@/services/statistics";
 import { getZonedParts, localDateKey } from "@/shared/timezone";
-import { useCurrentSeconds } from "@/components/use-current-seconds";
 import {
-  goalTrackStatusLabel,
+  goalStatusLabel,
   sessionCreatedViaLabel,
   sessionEntryModeLabel,
   sessionStatusLabel,
   taskStatusLabel,
+  timeBasisLabel,
 } from "@/shared/labels";
 
 function durationLabel(seconds: number) {
@@ -44,18 +44,11 @@ function localInputValue(date: Date | string, timezone: string) {
     .padStart(2, "0")}:${parts.minute.toString().padStart(2, "0")}`;
 }
 
-function sessionSeconds(session: HistorySession, nowSeconds: number | null) {
-  if (session.status === "cancelled") return 0;
+function sessionDuration(session: HistorySession): number | null {
   if (session.status === "completed") return session.durationSeconds ?? 0;
-  const end =
-    session.status === "paused" && session.pausedAt
-      ? new Date(session.pausedAt).getTime() / 1000
-      : (nowSeconds ?? new Date(session.startedAt).getTime() / 1000);
-  return Math.max(
-    0,
-    Math.floor(end - new Date(session.startedAt).getTime() / 1000) -
-      session.totalPausedSeconds,
-  );
+  // Live Sessions are owned by the execution page; history shows their
+  // state without guessing a live number.
+  return null;
 }
 
 function ErrorMessage({ error }: { error: string | null }) {
@@ -80,14 +73,13 @@ function SessionRow({
   timezone: string;
 }) {
   const router = useRouter();
-  const nowSeconds = useCurrentSeconds();
   const [detail, setDetail] = useState<HistorySessionDetail | null>(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [overlap, setOverlap] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-  const [trackId, setTrackId] = useState(session.trackId);
+  const [goalId, setGoalId] = useState(session.goalId);
   const [taskId, setTaskId] = useState(session.taskId ?? "");
   const [startedAt, setStartedAt] = useState(
     localInputValue(session.startedAt, timezone),
@@ -95,11 +87,8 @@ function SessionRow({
   const [endedAt, setEndedAt] = useState(
     session.endedAt ? localInputValue(session.endedAt, timezone) : "",
   );
-  const [plannedMinutes, setPlannedMinutes] = useState(
-    session.plannedMinutes?.toString() ?? "",
-  );
   const [note, setNote] = useState(session.note ?? "");
-  const selectedTarget = targets.find((target) => target.track.id === trackId);
+  const selectedTarget = targets.find((target) => target.goal.id === goalId);
 
   function loadDetail() {
     const nextOpen = !open;
@@ -118,11 +107,10 @@ function SessionRow({
     startTransition(async () => {
       const result = await updateHistorySessionAction({
         id: session.id,
-        trackId,
+        goalId,
         taskId: taskId || null,
         startedAtLocal: startedAt,
         endedAtLocal: endedAt,
-        plannedMinutes: plannedMinutes ? Number(plannedMinutes) : null,
         note: note || null,
         allowOverlap,
       });
@@ -150,6 +138,8 @@ function SessionRow({
     });
   }
 
+  const duration = sessionDuration(session);
+
   return (
     <li className="rounded-xl border bg-white">
       <button
@@ -160,9 +150,12 @@ function SessionRow({
       >
         <span className="min-w-0">
           <span className="flex flex-wrap items-center gap-2">
-            <strong className="truncate">{session.track.title}</strong>
+            <strong className="truncate">{session.goal.title}</strong>
             <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">
               {sessionStatusLabel[session.status]}
+            </span>
+            <span className="text-xs text-stone-500">
+              {timeBasisLabel[session.timeBasis]}
             </span>
             {session.entryMode === "manual" && (
               <span className="text-xs text-stone-500">
@@ -171,7 +164,7 @@ function SessionRow({
             )}
           </span>
           <span className="mt-1 block truncate text-sm text-stone-600">
-            {session.task?.title ?? "自由专注"} ·{" "}
+            {session.task?.title ?? "围绕目标"} ·{" "}
             {new Intl.DateTimeFormat("zh-CN", {
               timeZone: timezone,
               hour: "2-digit",
@@ -180,7 +173,7 @@ function SessionRow({
           </span>
         </span>
         <span className="shrink-0 font-mono text-sm font-medium">
-          {durationLabel(sessionSeconds(session, nowSeconds))}
+          {duration === null ? "—" : durationLabel(duration)}
         </span>
       </button>
 
@@ -195,35 +188,16 @@ function SessionRow({
                   <dt className="text-stone-500">来源</dt>
                   <dd>
                     {sessionEntryModeLabel[session.entryMode]} ·{" "}
-                    {sessionCreatedViaLabel[session.createdVia]}
+                    {sessionCreatedViaLabel[session.createdVia]} ·{" "}
+                    {timeBasisLabel[session.timeBasis]}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-stone-500">暂停</dt>
-                  <dd>{durationLabel(session.totalPausedSeconds)}</dd>
-                </div>
-                <div>
-                  <dt className="text-stone-500">计划</dt>
+                  <dt className="text-stone-500">有效时长</dt>
                   <dd>
-                    {session.plannedMinutes
-                      ? `${session.plannedMinutes} 分钟`
-                      : "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-stone-500">有效 / 墙上时间</dt>
-                  <dd>
-                    {durationLabel(sessionSeconds(session, nowSeconds))} /{" "}
-                    {session.endedAt
-                      ? durationLabel(
-                          Math.max(
-                            0,
-                            (new Date(session.endedAt).getTime() -
-                              new Date(session.startedAt).getTime()) /
-                              1000,
-                          ),
-                        )
-                      : "进行中"}
+                    {duration === null
+                      ? "进行中（在今天页查看实时时间）"
+                      : durationLabel(duration)}
                   </dd>
                 </div>
                 <div>
@@ -249,10 +223,22 @@ function SessionRow({
                   </dd>
                 </div>
               </dl>
+              {session.intent && (
+                <div className="text-sm">
+                  <h3 className="text-stone-500">本次意图</h3>
+                  <p className="whitespace-pre-wrap">{session.intent}</p>
+                </div>
+              )}
               <div className="text-sm">
                 <h3 className="text-stone-500">笔记</h3>
                 <p className="whitespace-pre-wrap">{session.note || "—"}</p>
               </div>
+              {session.resumeHint && (
+                <div className="text-sm">
+                  <h3 className="text-stone-500">接续提示</h3>
+                  <p className="whitespace-pre-wrap">{session.resumeHint}</p>
+                </div>
+              )}
 
               {(session.status === "active" || session.status === "paused") && (
                 <button
@@ -267,22 +253,25 @@ function SessionRow({
 
               {session.status === "completed" && (
                 <div className="space-y-3 rounded-lg bg-stone-50 p-3">
-                  <h3 className="font-medium">编辑记录</h3>
+                  <h3 className="font-medium">更正记录</h3>
+                  <p className="text-xs text-stone-500">
+                    修改时间后统计按「已更正」口径分摊；原始区间保留为来源。
+                  </p>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-sm">
-                      推进线
+                      目标
                       <select
-                        value={trackId}
+                        value={goalId}
                         onChange={(event) => {
-                          setTrackId(event.target.value);
+                          setGoalId(event.target.value);
                           setTaskId("");
                         }}
                         className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
                       >
                         {targets.map((target) => (
-                          <option key={target.track.id} value={target.track.id}>
-                            {target.track.title} (
-                            {goalTrackStatusLabel[target.track.status]})
+                          <option key={target.goal.id} value={target.goal.id}>
+                            {target.goal.title} (
+                            {goalStatusLabel[target.goal.status]})
                           </option>
                         ))}
                       </select>
@@ -319,18 +308,6 @@ function SessionRow({
                         required
                         value={endedAt}
                         onChange={(event) => setEndedAt(event.target.value)}
-                        className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
-                      />
-                    </label>
-                    <label className="text-sm">
-                      计划（分钟）
-                      <input
-                        type="number"
-                        min="1"
-                        value={plannedMinutes}
-                        onChange={(event) =>
-                          setPlannedMinutes(event.target.value)
-                        }
                         className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
                       />
                     </label>
@@ -483,7 +460,7 @@ function AddSessionForm({
   timezone: string;
 }) {
   const router = useRouter();
-  const [trackId, setTrackId] = useState(targets[0]?.track.id ?? "");
+  const [goalId, setGoalId] = useState(targets[0]?.goal.id ?? "");
   const [taskId, setTaskId] = useState("");
   const [durationMinutes, setDurationMinutes] = useState("30");
   const [endedAt, setEndedAt] = useState(() =>
@@ -496,14 +473,14 @@ function AddSessionForm({
     crypto.randomUUID(),
   );
   const [pending, startTransition] = useTransition();
-  const selectedTarget = targets.find((target) => target.track.id === trackId);
+  const selectedTarget = targets.find((target) => target.goal.id === goalId);
 
   function submit(allowOverlap: boolean) {
     setError(null);
     setOverlap(false);
     startTransition(async () => {
       const result = await logSessionAction({
-        trackId,
+        goalId,
         taskId: taskId || null,
         durationMinutes: Number(durationMinutes),
         endedAtLocal: endedAt,
@@ -515,7 +492,7 @@ function AddSessionForm({
         const context = result.error.context;
         setError(
           result.error.code === "SESSION_TIME_OVERLAP" && context
-            ? `这段专注与「${context.track}」的时间冲突（${context.startedAt} – ${context.endedAt ?? "进行中"}）。`
+            ? `这段专注与「${context.goal}」的时间冲突（${context.startedAt} – ${context.endedAt ?? "进行中"}）。`
             : result.error.message,
         );
         setOverlap(result.error.code === "SESSION_TIME_OVERLAP");
@@ -529,30 +506,29 @@ function AddSessionForm({
 
   if (!targets.length)
     return (
-      <p className="text-sm text-stone-500">先创建一条推进线，才能补录时间。</p>
+      <p className="text-sm text-stone-500">先创建一个目标，才能补录时间。</p>
     );
 
   return (
     <section className="rounded-2xl border bg-stone-50 p-4 sm:p-5">
       <h2 className="text-lg font-semibold">补录一段</h2>
       <p className="mt-1 text-sm text-stone-600">
-        时间按 {timezone} 计算；手动补录会立即标记为已完成。
+        时间按 {timezone} 计算；手动补录会立即标记为已完成，不计入当前选择。
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-sm">
-          推进线
+          目标
           <select
-            value={trackId}
+            value={goalId}
             onChange={(event) => {
-              setTrackId(event.target.value);
+              setGoalId(event.target.value);
               setTaskId("");
             }}
             className="mt-1 h-10 w-full rounded-lg border bg-white px-2"
           >
             {targets.map((target) => (
-              <option key={target.track.id} value={target.track.id}>
-                {target.track.title} (
-                {goalTrackStatusLabel[target.track.status]})
+              <option key={target.goal.id} value={target.goal.id}>
+                {target.goal.title} ({goalStatusLabel[target.goal.status]})
               </option>
             ))}
           </select>
@@ -609,7 +585,7 @@ function AddSessionForm({
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={pending || !trackId}
+          disabled={pending || !goalId}
           onClick={() => submit(false)}
           className="rounded-lg bg-stone-900 px-4 py-2 text-sm text-white disabled:opacity-50"
         >
@@ -643,7 +619,6 @@ export function HistoryView({
   today: Statistics;
   week: Statistics;
 }) {
-  const nowSeconds = useCurrentSeconds();
   const groups = useMemo(() => {
     const grouped = new Map<string, HistorySession[]>();
     for (const session of sessions) {
@@ -662,22 +637,22 @@ export function HistoryView({
         <Stat label="本周完成" value={String(week.completedTaskCount)} />
         <Stat label="专注天数" value={String(week.focusDays)} />
       </div>
-      {week.byTrack.length > 0 && (
+      {week.byGoal.length > 0 && (
         <section className="rounded-xl border bg-white p-4">
           <h2 className="font-semibold">本周投入分布</h2>
           <ul className="mt-3 space-y-2">
-            {week.byTrack.map((track) => (
+            {week.byGoal.map((goal) => (
               <li
-                key={track.trackId}
+                key={goal.goalId}
                 className="flex items-center justify-between gap-4 text-sm"
               >
                 <span>
-                  {track.title}{" "}
+                  {goal.title}{" "}
                   <span className="text-stone-400">
-                    ({goalTrackStatusLabel[track.status]})
+                    ({goalStatusLabel[goal.status]})
                   </span>
                 </span>
-                <strong>{durationLabel(track.focusSeconds)}</strong>
+                <strong>{durationLabel(goal.focusSeconds)}</strong>
               </li>
             ))}
           </ul>
@@ -686,7 +661,7 @@ export function HistoryView({
       <AddSessionForm targets={targets} timezone={timezone} />
       {!sessions.length ? (
         <div className="rounded-2xl border border-dashed p-10 text-center text-stone-500">
-          没有符合筛选的专注记录。
+          没有符合筛选的执行记录。
         </div>
       ) : (
         [...groups.entries()].map(([date, items]) => (
@@ -701,7 +676,7 @@ export function HistoryView({
               <span className="text-sm text-stone-500">
                 {durationLabel(
                   items.reduce(
-                    (sum, item) => sum + sessionSeconds(item, nowSeconds),
+                    (sum, item) => sum + (sessionDuration(item) ?? 0),
                     0,
                   ),
                 )}

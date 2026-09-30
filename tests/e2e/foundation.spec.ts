@@ -14,7 +14,7 @@ async function readMcpResponse(response: {
   }
   const data = text
     .split("\n")
-    .filter((line) => line.startsWith("data: "))
+    .filter((line: string) => line.startsWith("data: "))
     .map((line) => line.slice(6));
   return JSON.parse(data.at(-1) ?? "null");
 }
@@ -29,12 +29,11 @@ test("login, setup, cookie persistence, and logout", async ({ page }) => {
   await expect(page.getByText("数据库已就绪")).toBeVisible();
 
   await page.getByLabel("时区").fill("Asia/Shanghai");
-  await page.getByLabel("默认专注时长").fill("30");
   await page.getByRole("button", { name: "完成设置" }).click();
 
   await expect(page).toHaveURL(/\/today$/);
   await expect(
-    page.getByRole("heading", { name: "还没有可执行的推进线" }),
+    page.getByText("最近，有什么事是你真的想推进的？"),
   ).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(/\/today$/);
@@ -112,7 +111,6 @@ test("MCP rejects missing and incorrect tokens and initializes with the configur
         name: "settings_update",
         arguments: {
           timezone: "Asia/Tokyo",
-          defaultFocusMinutes: 45,
           weekStartsOn: 0,
         },
       },
@@ -132,7 +130,6 @@ test("MCP rejects missing and incorrect tokens and initializes with the configur
         ok: true,
         data: {
           timezone: "Asia/Tokyo",
-          defaultFocusMinutes: 45,
           weekStartsOn: 0,
         },
       },
@@ -160,7 +157,7 @@ test("setup shows an actionable error when the schema is incomplete", async ({
   }
 
   await page.goto("/setup");
-  await expect(page.getByText("数据库 schema 尚未就绪")).toBeVisible();
+  await expect(page.getByText("数据库结构尚未就绪")).toBeVisible();
   await expect(page.getByText(/pnpm db:migrate/)).toBeVisible();
 
   const recoveryPool = new Pool({

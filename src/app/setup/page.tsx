@@ -8,6 +8,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { settingsService } from "@/services";
 
+// Setup inspects cookies and live database readiness; it has no static form.
+export const dynamic = "force-dynamic";
+
 export default async function SetupPage() {
   if (!(await readWebSession())) redirect("/login");
 
@@ -63,7 +66,6 @@ export default async function SetupPage() {
               <SettingsForm
                 mode="setup"
                 timezone={settings.timezone}
-                defaultFocusMinutes={settings.defaultFocusMinutes}
                 weekStartsOn={settings.weekStartsOn}
                 suggestBrowserTimezone={!settings.setupCompletedAt}
               />

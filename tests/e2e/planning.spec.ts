@@ -8,15 +8,19 @@ import {
 const webPassword = "correct-horse-battery-staple";
 const mcpToken = "mcp-token-that-is-at-least-32-characters";
 
-async function loginAndSetup(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("实例密码").fill(webPassword);
-  await page.getByRole("button", { name: "进入 Time OS" }).click();
-  await page.waitForURL(/\/(setup|today)$/);
-  await page.goto("/setup");
-  await page.getByLabel("时区").fill("Asia/Shanghai");
-  await page.getByRole("button", { name: "完成设置" }).click();
-  await page.waitForURL(/\/today$/);
+async function readMcpResponse(response: {
+  headers(): Record<string, string>;
+  text(): Promise<string>;
+}) {
+  const text = await response.text();
+  if (!response.headers()["content-type"]?.includes("text/event-stream")) {
+    return JSON.parse(text);
+  }
+  const data = text
+    .split("\n")
+    .filter((line: string) => line.startsWith("data: "))
+    .map((line) => line.slice(6));
+  return JSON.parse(data.at(-1) ?? "null");
 }
 
 async function mcpCall(
@@ -39,145 +43,120 @@ async function mcpCall(
     },
   });
   expect(response.status()).toBe(200);
-  const text = await response.text();
-  const raw = response.headers()["content-type"]?.includes("text/event-stream")
-    ? text
-        .split("\n")
-        .filter((line) => line.startsWith("data: "))
-        .at(-1)
-        ?.slice(6)
-    : text;
-  return JSON.parse(raw ?? "null").result.structuredContent;
+  const parsed = await readMcpResponse(response);
+  return parsed.result.structuredContent as {
+    ok: boolean;
+    data?: Record<string, unknown>;
+    error?: { code: string };
+  };
 }
 
-test("Web maintains a plan and Current Next across reorder, completion, and reopen", async ({
-  page,
-}) => {
-  await loginAndSetup(page);
-  await page.goto("/goals");
-  await page.getByText("新建目标", { exact: true }).click();
-  await page
-    .getByPlaceholder("例如：发布 Time OS MVP")
-    .fill("Ship planning flow");
-  await page.getByRole("button", { name: "创建目标" }).click();
+async function loginAndSetup(page: Page) {
+  await page.goto("/login");
+  await page.getByLabel("实例密码").fill(webPassword);
+  await page.getByRole("button", { name: "进入 Time OS" }).click();
+  await page.waitForURL(/\/(setup|today)$/);
+  await page.goto("/setup");
+  await page.getByLabel("时区").fill("Asia/Shanghai");
+  await page.getByRole("button", { name: "完成设置" }).click();
+  await page.waitForURL(/\/today$/);
+}
 
-  const goalCard = page
-    .locator('[data-slot="card"]')
-    .filter({ hasText: "Ship planning flow" })
-    .first();
-  await goalCard.getByText("＋ 添加推进线", { exact: true }).click();
-  await goalCard.getByLabel("推进线名称").fill("Core workflow");
-  await goalCard.getByRole("button", { name: "创建推进线" }).click();
-  await page.getByRole("link", { name: "Core workflow" }).click();
+test.describe("Basic goal and task management", () => {
+  test("create a goal, quick-add tasks, and work their lifecycle", async ({
+    page,
+  }) => {
+    await loginAndSetup(page);
+    await page.goto("/goals");
 
-  await page.getByText("批量粘贴", { exact: true }).click();
-  await page
-    .getByPlaceholder(/每行一个任务/)
-    .fill("First task\nSecond task\nThird task");
-  await page.getByRole("button", { name: "按行创建" }).click();
-  await expect(page.getByText("First task").first()).toBeVisible();
-  await expect(
-    page.getByText("这是这条推进线现在唯一需要关注的下一步。"),
-  ).toBeVisible();
+    await page.getByText("新建目标", { exact: true }).click();
+    await page.getByLabel("目标名称").fill("Ship planning flow");
+    await page.getByLabel("为什么值得推进").fill("Better daily execution");
+    await page.getByRole("button", { name: "创建目标" }).click();
+    await expect(page.getByText("Ship planning flow")).toBeVisible();
 
-  const reorder = page.getByRole("region", {
-    name: "调整任务顺序（不会改变下一步）",
-  });
-  await reorder
-    .getByRole("button", { name: "Third task", exact: true })
-    .dragTo(reorder.getByRole("button", { name: "First task", exact: true }));
-  await expect(page.getByText("First task").first()).toBeVisible();
+    // Quick-add two tasks in one submission.
+    const goalCard = page
+      .locator('[data-goal-status="active"]')
+      .filter({ hasText: "Ship planning flow" });
+    await goalCard.getByLabel(/快速添加任务/).fill("First task\nSecond task");
+    await goalCard.getByRole("button", { name: "添加", exact: true }).click();
+    await expect(page.getByText("First task")).toBeVisible();
+    await expect(page.getByText("Second task")).toBeVisible();
 
-  const firstCard = page
-    .locator('[data-slot="card"]')
-    .filter({ hasText: "First task" })
-    .last();
-  await firstCard.getByRole("button", { name: "完成" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Second task" }),
-  ).toBeVisible();
-  await expect(firstCard.getByText("编辑任务", { exact: true })).toHaveCount(0);
-  await firstCard.getByRole("button", { name: "重新打开" }).click();
-  await expect(firstCard.getByText("编辑任务", { exact: true })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Second task" }),
-  ).toBeVisible();
+    // Complete, skip, and reopen across the two tasks.
+    const firstRow = page
+      .locator("li")
+      .filter({ hasText: "First task" })
+      .first();
+    await firstRow.getByRole("button", { name: "完成" }).click();
+    await expect(firstRow.getByText("已完成")).toBeVisible();
+    await firstRow.getByRole("button", { name: "重新打开" }).click();
+    await expect(firstRow.getByText("待办")).toBeVisible();
 
-  await page.setViewportSize({ width: 375, height: 812 });
-  await expect(
-    page.getByRole("heading", { name: "Core workflow" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "设为下一步" }).first(),
-  ).toBeVisible();
-});
+    const secondRow = page
+      .locator("li")
+      .filter({ hasText: "Second task" })
+      .first();
+    await secondRow.getByRole("button", { name: "跳过" }).click();
+    await expect(secondRow.getByText("已跳过")).toBeVisible();
 
-test("MCP creates a complete plan that appears in Web immediately", async ({
-  page,
-  request,
-}) => {
-  const goal = await mcpCall(request, 20, "goal_create", { title: "MCP Goal" });
-  expect(goal.ok).toBe(true);
-  const track = await mcpCall(request, 21, "track_create", {
-    goalId: goal.data.id,
-    title: "MCP Track",
-  });
-  const created = await mcpCall(request, 22, "tasks_create", {
-    trackId: track.data.id,
-    tasks: [{ title: "MCP planned task" }, { title: "MCP follow-up" }],
-    idempotencyKey: "planning-e2e-mcp-batch",
-  });
-  expect(created.ok).toBe(true);
-  expect(created.data).toHaveLength(2);
-  expect(created.data[0]).toMatchObject({ title: "MCP planned task" });
-
-  await loginAndSetup(page);
-  await page.goto(`/tracks/${track.data.id}`);
-  await expect(page.getByRole("heading", { name: "MCP Track" })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "MCP planned task" }),
-  ).toBeVisible();
-});
-
-test("completing a Goal with an active Session stays in an actionable dialog", async ({
-  page,
-  request,
-}) => {
-  const goal = await mcpCall(request, 30, "goal_create", {
-    title: "Protected active Goal",
-  });
-  const track = await mcpCall(request, 31, "track_create", {
-    goalId: goal.data.id,
-    title: "Running Track",
-  });
-  const tasks = await mcpCall(request, 32, "tasks_create", {
-    trackId: track.data.id,
-    tasks: [{ title: "Running Task" }],
-    idempotencyKey: "planning-active-session-tasks",
-  });
-  const session = await mcpCall(request, 33, "session_start", {
-    trackId: track.data.id,
-    taskId: tasks.data[0].id,
-    plannedMinutes: 25,
-    idempotencyKey: "planning-active-session",
+    // Goal lifecycle: archive (the card leaves the default view) and
+    // reactivate from the full view.
+    await goalCard.getByRole("button", { name: "归档" }).click();
+    await page.getByRole("button", { name: "查看已完成与已归档" }).click();
+    const archivedCard = page
+      .locator('[data-goal-status="archived"]')
+      .filter({ hasText: "Ship planning flow" });
+    await expect(archivedCard).toBeVisible();
+    await archivedCard.getByRole("button", { name: "重新启用" }).click();
+    await expect(
+      page
+        .locator('[data-goal-status="active"]')
+        .filter({ hasText: "Ship planning flow" }),
+    ).toBeVisible();
   });
 
-  await loginAndSetup(page);
-  await page.goto("/goals");
-  const goalCard = page
-    .locator('[data-slot="card"]')
-    .filter({ hasText: "Protected active Goal" })
-    .first();
-  await goalCard.getByRole("button", { name: "完成" }).click();
+  test("MCP mirrors the same domain through structured tools", async ({
+    request,
+  }) => {
+    await mcpCall(request, 1, "goal_create", {
+      title: "MCP Planning Goal",
+      idempotencyKey: "e2e-goal-1",
+    });
+    const replay = await mcpCall(request, 2, "goal_create", {
+      title: "MCP Planning Goal",
+      idempotencyKey: "e2e-goal-1",
+    });
+    expect(replay.ok).toBe(true);
 
-  await expect(
-    page.getByRole("heading", { name: "暂时无法完成目标" }),
-  ).toBeVisible();
-  await expect(page.getByText(/还有一段进行中的专注/)).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "返回当前专注" }),
-  ).toBeVisible();
-  await expect(page).toHaveURL(/\/goals$/);
+    const goals = await mcpCall(request, 3, "goals_list", {});
+    expect(goals.ok).toBe(true);
+    const created = (goals.data as { items: { title: string }[] }).items.find(
+      (goal) => goal.title === "MCP Planning Goal",
+    );
+    expect(created).toBeDefined();
 
-  await mcpCall(request, 34, "session_cancel", { id: session.data.id });
+    const goalId = (
+      goals.data as { items: { id: string; title: string }[] }
+    ).items.find((goal) => goal.title === "MCP Planning Goal")!.id;
+    const tasks = await mcpCall(request, 4, "tasks_create", {
+      goalId,
+      tasks: [{ title: "MCP Task One" }, { title: "MCP Task Two" }],
+    });
+    expect(tasks.ok).toBe(true);
+
+    const selection = await mcpCall(request, 5, "selection_set", {
+      goalId,
+    });
+    expect(selection.ok).toBe(true);
+
+    // Goal-level state guards still apply through MCP.
+    const invalidTask = await mcpCall(request, 6, "selection_set", {
+      goalId,
+      taskId: "00000000-0000-4000-8000-000000000000",
+    });
+    expect(invalidTask.ok).toBe(false);
+    expect(invalidTask.error?.code).toBe("TASK_NOT_FOUND");
+  });
 });

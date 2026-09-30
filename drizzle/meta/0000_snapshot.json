@@ -1,5 +1,5 @@
 {
-  "id": "cbc989e8-f09d-40e9-a873-0972d08c891a",
+  "id": "11475ebb-df49-4ebc-a9cd-649b6bd5cb7e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -21,20 +21,28 @@
           "primaryKey": false,
           "notNull": true
         },
-        "default_focus_minutes": {
-          "name": "default_focus_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
         "week_starts_on": {
           "name": "week_starts_on",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "selected_track_id": {
-          "name": "selected_track_id",
+        "timer_mode": {
+          "name": "timer_mode",
+          "type": "timer_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'stopwatch'"
+        },
+        "selected_goal_id": {
+          "name": "selected_goal_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "selected_task_id": {
+          "name": "selected_task_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -62,13 +70,22 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "app_settings_selected_track_id_tracks_id_fk": {
-          "name": "app_settings_selected_track_id_tracks_id_fk",
+        "app_settings_selected_goal_id_goals_id_fk": {
+          "name": "app_settings_selected_goal_id_goals_id_fk",
           "tableFrom": "app_settings",
-          "tableTo": "tracks",
-          "columnsFrom": ["selected_track_id"],
+          "tableTo": "goals",
+          "columnsFrom": ["selected_goal_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "app_settings_selection_task_fk": {
+          "name": "app_settings_selection_task_fk",
+          "tableFrom": "app_settings",
+          "tableTo": "tasks",
+          "columnsFrom": ["selected_task_id", "selected_goal_id"],
+          "columnsTo": ["id", "goal_id"],
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -80,13 +97,13 @@
           "name": "app_settings_singleton",
           "value": "\"app_settings\".\"id\" = 'default'"
         },
-        "app_settings_focus_positive": {
-          "name": "app_settings_focus_positive",
-          "value": "\"app_settings\".\"default_focus_minutes\" > 0"
-        },
         "app_settings_week_start": {
           "name": "app_settings_week_start",
           "value": "\"app_settings\".\"week_starts_on\" in (0, 1)"
+        },
+        "app_settings_task_requires_goal": {
+          "name": "app_settings_task_requires_goal",
+          "value": "\"app_settings\".\"selected_task_id\" is null or \"app_settings\".\"selected_goal_id\" is not null"
         }
       },
       "isRLSEnabled": false
@@ -173,6 +190,97 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.focus_intervals": {
+      "name": "focus_intervals",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phase": {
+          "name": "phase",
+          "type": "focus_phase",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'focus'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "focus_intervals_session_idx": {
+          "name": "focus_intervals_session_idx",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "focus_intervals_session_id_sessions_id_fk": {
+          "name": "focus_intervals_session_id_sessions_id_fk",
+          "tableFrom": "focus_intervals",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "focus_intervals_end_after_start": {
+          "name": "focus_intervals_end_after_start",
+          "value": "\"focus_intervals\".\"ended_at\" is null or \"focus_intervals\".\"ended_at\" >= \"focus_intervals\".\"started_at\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.goals": {
@@ -379,8 +487,8 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "track_id": {
-          "name": "track_id",
+        "goal_id": {
+          "name": "goal_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
@@ -412,30 +520,70 @@
           "primaryKey": false,
           "notNull": true
         },
-        "planned_minutes": {
-          "name": "planned_minutes",
-          "type": "integer",
+        "timer_mode": {
+          "name": "timer_mode",
+          "type": "timer_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "time_basis": {
+          "name": "time_basis",
+          "type": "time_basis",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timer_config": {
+          "name": "timer_config",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "intent": {
+          "name": "intent",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resume_hint": {
+          "name": "resume_hint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note_version": {
+          "name": "note_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "resume_hint_version": {
+          "name": "resume_hint_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "started_at": {
           "name": "started_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
-        },
-        "paused_at": {
-          "name": "paused_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "total_paused_seconds": {
-          "name": "total_paused_seconds",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "ended_at": {
           "name": "ended_at",
@@ -446,12 +594,6 @@
         "duration_seconds": {
           "name": "duration_seconds",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -487,11 +629,11 @@
           "method": "btree",
           "with": {}
         },
-        "sessions_track_started_idx": {
-          "name": "sessions_track_started_idx",
+        "sessions_goal_started_idx": {
+          "name": "sessions_goal_started_idx",
           "columns": [
             {
-              "expression": "track_id",
+              "expression": "goal_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -546,21 +688,21 @@
         }
       },
       "foreignKeys": {
-        "sessions_track_id_tracks_id_fk": {
-          "name": "sessions_track_id_tracks_id_fk",
+        "sessions_goal_id_goals_id_fk": {
+          "name": "sessions_goal_id_goals_id_fk",
           "tableFrom": "sessions",
-          "tableTo": "tracks",
-          "columnsFrom": ["track_id"],
+          "tableTo": "goals",
+          "columnsFrom": ["goal_id"],
           "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "sessions_task_track_fk": {
-          "name": "sessions_task_track_fk",
+        "sessions_task_goal_fk": {
+          "name": "sessions_task_goal_fk",
           "tableFrom": "sessions",
           "tableTo": "tasks",
-          "columnsFrom": ["task_id", "track_id"],
-          "columnsTo": ["id", "track_id"],
+          "columnsFrom": ["task_id", "goal_id"],
+          "columnsTo": ["id", "goal_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -569,14 +711,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "sessions_planned_minutes_positive": {
-          "name": "sessions_planned_minutes_positive",
-          "value": "\"sessions\".\"planned_minutes\" is null or \"sessions\".\"planned_minutes\" > 0"
-        },
-        "sessions_paused_seconds_nonnegative": {
-          "name": "sessions_paused_seconds_nonnegative",
-          "value": "\"sessions\".\"total_paused_seconds\" >= 0"
-        },
         "sessions_duration_seconds_nonnegative": {
           "name": "sessions_duration_seconds_nonnegative",
           "value": "\"sessions\".\"duration_seconds\" is null or \"sessions\".\"duration_seconds\" >= 0"
@@ -595,8 +729,8 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "track_id": {
-          "name": "track_id",
+        "goal_id": {
+          "name": "goal_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
@@ -674,11 +808,11 @@
         }
       },
       "indexes": {
-        "tasks_track_position_unique": {
-          "name": "tasks_track_position_unique",
+        "tasks_goal_position_unique": {
+          "name": "tasks_goal_position_unique",
           "columns": [
             {
-              "expression": "track_id",
+              "expression": "goal_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -695,141 +829,8 @@
           "method": "btree",
           "with": {}
         },
-        "tasks_track_status_position_idx": {
-          "name": "tasks_track_status_position_idx",
-          "columns": [
-            {
-              "expression": "track_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "position",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "tasks_track_id_tracks_id_fk": {
-          "name": "tasks_track_id_tracks_id_fk",
-          "tableFrom": "tasks",
-          "tableTo": "tracks",
-          "columnsFrom": ["track_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "tasks_id_track_unique": {
-          "name": "tasks_id_track_unique",
-          "nullsNotDistinct": false,
-          "columns": ["id", "track_id"]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "tasks_position_positive": {
-          "name": "tasks_position_positive",
-          "value": "\"tasks\".\"position\" > 0"
-        },
-        "tasks_estimated_minutes_positive": {
-          "name": "tasks_estimated_minutes_positive",
-          "value": "\"tasks\".\"estimated_minutes\" is null or \"tasks\".\"estimated_minutes\" > 0"
-        },
-        "tasks_resource_pair": {
-          "name": "tasks_resource_pair",
-          "value": "(\"tasks\".\"resource_type\" is null) = (\"tasks\".\"resource_value\" is null)"
-        },
-        "tasks_url_protocol": {
-          "name": "tasks_url_protocol",
-          "value": "\"tasks\".\"resource_type\" is distinct from 'url' or \"tasks\".\"resource_value\" ~ '^https?://'"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.tracks": {
-      "name": "tracks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "goal_id": {
-          "name": "goal_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "varchar(240)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "track_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "current_task_id": {
-          "name": "current_task_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "tracks_goal_status_position_idx": {
-          "name": "tracks_goal_status_position_idx",
+        "tasks_goal_status_position_idx": {
+          "name": "tasks_goal_status_position_idx",
           "columns": [
             {
               "expression": "goal_id",
@@ -857,38 +858,52 @@
         }
       },
       "foreignKeys": {
-        "tracks_goal_id_goals_id_fk": {
-          "name": "tracks_goal_id_goals_id_fk",
-          "tableFrom": "tracks",
+        "tasks_goal_id_goals_id_fk": {
+          "name": "tasks_goal_id_goals_id_fk",
+          "tableFrom": "tasks",
           "tableTo": "goals",
           "columnsFrom": ["goal_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "tracks_current_task_id_tasks_id_fk": {
-          "name": "tracks_current_task_id_tasks_id_fk",
-          "tableFrom": "tracks",
-          "tableTo": "tasks",
-          "columnsFrom": ["current_task_id"],
           "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "tasks_id_goal_unique": {
+          "name": "tasks_id_goal_unique",
+          "nullsNotDistinct": false,
+          "columns": ["id", "goal_id"]
+        }
+      },
       "policies": {},
       "checkConstraints": {
-        "tracks_position_positive": {
-          "name": "tracks_position_positive",
-          "value": "\"tracks\".\"position\" > 0"
+        "tasks_position_positive": {
+          "name": "tasks_position_positive",
+          "value": "\"tasks\".\"position\" > 0"
+        },
+        "tasks_estimated_minutes_positive": {
+          "name": "tasks_estimated_minutes_positive",
+          "value": "\"tasks\".\"estimated_minutes\" is null or \"tasks\".\"estimated_minutes\" > 0"
+        },
+        "tasks_resource_pair": {
+          "name": "tasks_resource_pair",
+          "value": "(\"tasks\".\"resource_type\" is null) = (\"tasks\".\"resource_value\" is null)"
+        },
+        "tasks_url_protocol": {
+          "name": "tasks_url_protocol",
+          "value": "\"tasks\".\"resource_type\" is distinct from 'url' or \"tasks\".\"resource_value\" ~ '^https?://'"
         }
       },
       "isRLSEnabled": false
     }
   },
   "enums": {
+    "public.focus_phase": {
+      "name": "focus_phase",
+      "schema": "public",
+      "values": ["focus", "short_break", "long_break"]
+    },
     "public.goal_status": {
       "name": "goal_status",
       "schema": "public",
@@ -919,10 +934,15 @@
       "schema": "public",
       "values": ["pending", "completed", "skipped", "archived"]
     },
-    "public.track_status": {
-      "name": "track_status",
+    "public.time_basis": {
+      "name": "time_basis",
       "schema": "public",
-      "values": ["active", "completed", "archived"]
+      "values": ["observed", "manual", "corrected"]
+    },
+    "public.timer_mode": {
+      "name": "timer_mode",
+      "schema": "public",
+      "values": ["stopwatch", "pomodoro"]
     }
   },
   "schemas": {},

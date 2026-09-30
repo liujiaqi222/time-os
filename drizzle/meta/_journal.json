@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1790079412525,
-      "tag": "0000_classy_chat",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1790084946612,
-      "tag": "0001_silent_sentinels",
+      "when": 1790668756729,
+      "tag": "0000_flashy_silver_fox",
       "breakpoints": true
     }
   ]

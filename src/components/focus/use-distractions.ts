@@ -85,6 +85,10 @@ export function useDistractions(options: {
     setEditingId(null);
   }, []);
 
+  const replace = useCallback((items: Distraction[]) => {
+    setList(items);
+  }, []);
+
   return {
     list,
     error,
@@ -96,5 +100,6 @@ export function useDistractions(options: {
     saveEdit,
     beginEdit,
     cancelEdit,
+    replace,
   };
 }

@@ -2,13 +2,13 @@ import Link from "next/link";
 
 import { HistoryView } from "@/components/history-view";
 import { historyService, settingsService, statisticsService } from "@/services";
-import { goalTrackStatusLabel } from "@/shared/labels";
+import { goalStatusLabel } from "@/shared/labels";
 import { addLocalDays, localDateStart } from "@/shared/timezone";
 
 interface HistorySearchParams {
   from?: string;
   to?: string;
-  trackId?: string;
+  goalId?: string;
   includeCancelled?: string;
   cursor?: string;
 }
@@ -36,6 +36,11 @@ function historyBoundary(
   }
 }
 
+/**
+ * 足迹 (PRD §7): a functional record view on the new model. The full
+ * visual redesign — activity calendar, per-goal browsing, audit filters —
+ * arrives with T09.
+ */
 export default async function HistoryPage({
   searchParams,
 }: {
@@ -54,7 +59,7 @@ export default async function HistoryPage({
     historyService.listSessions(context, {
       from: invalidRange ? undefined : from,
       to: invalidRange ? undefined : to,
-      trackId: uuidOrUndefined(query.trackId),
+      goalId: uuidOrUndefined(query.goalId),
       includeCancelled: query.includeCancelled === "true",
       cursor: uuidOrUndefined(query.cursor),
       limit: 30,
@@ -67,7 +72,7 @@ export default async function HistoryPage({
   const nextParams = new URLSearchParams();
   if (query.from) nextParams.set("from", query.from);
   if (query.to) nextParams.set("to", query.to);
-  if (query.trackId) nextParams.set("trackId", query.trackId);
+  if (query.goalId) nextParams.set("goalId", query.goalId);
   if (query.includeCancelled === "true")
     nextParams.set("includeCancelled", "true");
   if (page.nextCursor) nextParams.set("cursor", page.nextCursor);
@@ -75,9 +80,12 @@ export default async function HistoryPage({
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-4xl font-semibold tracking-tight">回顾</h1>
+        <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
+          足迹
+        </p>
+        <h1 className="mt-2 text-4xl font-semibold tracking-tight">真实投入</h1>
         <p className="mt-2 text-stone-600">
-          可信的专注记录与统计，按 {settings.timezone} 时区计算。
+          可信的执行记录与统计，按 {settings.timezone} 时区计算。
         </p>
       </header>
 
@@ -101,16 +109,16 @@ export default async function HistoryPage({
           />
         </label>
         <label className="text-sm">
-          推进线
+          目标
           <select
-            name="trackId"
-            defaultValue={query.trackId ?? ""}
+            name="goalId"
+            defaultValue={query.goalId ?? ""}
             className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
           >
-            <option value="">全部推进线</option>
-            {targets.map(({ track }) => (
-              <option key={track.id} value={track.id}>
-                {track.title} ({goalTrackStatusLabel[track.status]})
+            <option value="">全部目标</option>
+            {targets.map(({ goal }) => (
+              <option key={goal.id} value={goal.id}>
+                {goal.title} ({goalStatusLabel[goal.status]})
               </option>
             ))}
           </select>
@@ -153,7 +161,7 @@ export default async function HistoryPage({
             href={`/history?${nextParams.toString()}`}
             className="rounded-lg border bg-white px-4 py-2 text-sm hover:bg-stone-50"
           >
-            加载更早的专注记录
+            加载更早的执行记录
           </Link>
         </div>
       )}

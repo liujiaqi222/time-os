@@ -4,6 +4,10 @@ import { readWebSession } from "@/auth/web-session";
 import { AppShell } from "@/components/app-shell";
 import { sessionService, settingsService } from "@/services";
 
+// This segment is cookie-authenticated and reads live DB state on every
+// request; never prerender it against the deployment database.
+export const dynamic = "force-dynamic";
+
 export default async function ProtectedLayout({
   children,
 }: {

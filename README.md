@@ -16,8 +16,12 @@ Time OS 是一个 AI-native 的目标执行与时间管理工具。它记住每�
 cp .env.example .env.local
 pnpm install
 pnpm db:migrate
+# 可选：向空的本地数据库写入 2 个示例目标和 5 个任务
+pnpm db:seed
 pnpm dev
 ```
+
+`pnpm db:migrate` 使用已提交的 Drizzle migrations 建库；`pnpm db:seed` 仅允许连接 localhost/127.0.0.1，并在已有目标时默认跳过。v0.3 使用全新的 Goal → Task/Session 数据结构，不会自动转换旧版 Track 数据；升级旧实例前请另行备份并初始化新库。
 
 环境变量：
 
