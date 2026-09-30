@@ -19,6 +19,7 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { EndCard } from "@/components/today/end-card";
 import { IdlePanel } from "@/components/today/idle-panel";
 import { RunPanel, type RunBusyAction } from "@/components/today/run-panel";
+import type { Task } from "@/db/schema";
 import type { DashboardData } from "@/services/dashboard";
 import type { SessionView } from "@/services/session";
 import { formatHumanDuration } from "@/shared/session-timer";
@@ -288,6 +289,66 @@ export function TodayView({
     return result.ok ? result.data.resumeHintVersion : null;
   };
 
+  // ---- Optimistic Task handlers for IdlePanel ------------------------------
+
+  const handleOptimisticTaskAdd = useCallback((task: Task) => {
+    setDashboard((prev) => ({
+      ...prev,
+      todos: [...prev.todos, task],
+      goals: prev.goals.map((item) =>
+        item.goal.id === task.goalId
+          ? { ...item, pendingTaskCount: item.pendingTaskCount + 1 }
+          : item,
+      ),
+    }));
+  }, []);
+
+  const handleOptimisticTaskResolve = useCallback(
+    (tempId: string, realTask: Task) => {
+      setDashboard((prev) => ({
+        ...prev,
+        todos: prev.todos.map((task) => (task.id === tempId ? realTask : task)),
+      }));
+    },
+    [],
+  );
+
+  const handleOptimisticTaskRevert = useCallback(
+    (tempId: string, goalId: string) => {
+      setDashboard((prev) => ({
+        ...prev,
+        todos: prev.todos.filter((task) => task.id !== tempId),
+        goals: prev.goals.map((item) =>
+          item.goal.id === goalId
+            ? {
+                ...item,
+                pendingTaskCount: Math.max(0, item.pendingTaskCount - 1),
+              }
+            : item,
+        ),
+      }));
+    },
+    [],
+  );
+
+  const handleOptimisticSelectTask = useCallback(
+    (goalId: string, task: Task | null) => {
+      setDashboard((prev) => {
+        if (!prev.selection || prev.selection.goal.id !== goalId) return prev;
+        return {
+          ...prev,
+          selection: {
+            ...prev.selection,
+            task,
+            goalOnly: task === null,
+            reason: "explicit-selection",
+          },
+        };
+      });
+    },
+    [],
+  );
+
   // ---- Empty state ----------------------------------------------------------
 
   const handleCreateFirstGoal = async (e: React.FormEvent) => {
@@ -405,6 +466,10 @@ export function TodayView({
               onStart={(input) => void handleStart(input)}
               onRefresh={refresh}
               onError={setActionError}
+              onOptimisticTaskAdd={handleOptimisticTaskAdd}
+              onOptimisticTaskResolve={handleOptimisticTaskResolve}
+              onOptimisticTaskRevert={handleOptimisticTaskRevert}
+              onOptimisticSelectTask={handleOptimisticSelectTask}
             />
           ) : (
             <div className="flex flex-col items-start gap-5 py-8 sm:px-6">

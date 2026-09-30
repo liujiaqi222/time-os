@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Play, Sparkles } from "lucide-react";
+import Link from "next/link";
+import {
+  ArrowUpRight,
+  Circle,
+  CircleCheck,
+  ListTodo,
+  Loader2,
+  Play,
+  Plus,
+  Sparkles,
+} from "lucide-react";
 
 import {
   listTasksAction,
@@ -21,7 +31,6 @@ import {
 } from "@/components/ui/select";
 import type { Task } from "@/db/schema";
 import type { DashboardData } from "@/services/dashboard";
-import { taskStatusLabel } from "@/shared/labels";
 
 /**
  * Idle execution panel (PRD §5.1–5.3): resolved execution object with its
@@ -34,18 +43,25 @@ export function IdlePanel({
   onStart,
   onRefresh,
   onError,
+  onOptimisticTaskAdd,
+  onOptimisticTaskResolve,
+  onOptimisticTaskRevert,
+  onOptimisticSelectTask,
 }: {
   dashboard: DashboardData;
   busy: "none" | "start";
   onStart: (input: { intent: string | null }) => void;
   onRefresh: () => Promise<unknown>;
   onError: (message: string | null) => void;
+  onOptimisticTaskAdd?: (task: Task) => void;
+  onOptimisticTaskResolve?: (tempId: string, realTask: Task) => void;
+  onOptimisticTaskRevert?: (tempId: string, goalId: string) => void;
+  onOptimisticSelectTask?: (goalId: string, task: Task | null) => void;
 }) {
   const { selection, resumeHint, goals, todos } = dashboard;
   const [intent, setIntent] = useState("");
   const [showIntent, setShowIntent] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [busyQuickAdd, setBusyQuickAdd] = useState(false);
   // Fetched full pending list for the switcher, tagged with the goal it
   // belongs to so a goal switch immediately falls back to the dashboard
   // todos until the fetch lands (no sync setState inside the effect).
@@ -83,9 +99,31 @@ export function IdlePanel({
 
   const handleSelectTask = async (goalId: string, taskId: string | null) => {
     onError(null);
-    const result = await selectionSetAction({ goalId, taskId });
-    if (!result.ok) onError(result.error.message);
-    await onRefresh();
+    const previousSelection = selection;
+    const nextTask = taskId
+      ? (taskOptions.find((t) => t.id === taskId) ?? null)
+      : null;
+    onOptimisticSelectTask?.(goalId, nextTask);
+
+    try {
+      const result = await selectionSetAction({ goalId, taskId });
+      if (!result.ok) {
+        onOptimisticSelectTask?.(
+          previousSelection.goal.id,
+          previousSelection.task,
+        );
+        onError(result.error.message);
+      } else {
+        // Background sync without blocking UI
+        void onRefresh();
+      }
+    } catch {
+      onOptimisticSelectTask?.(
+        previousSelection.goal.id,
+        previousSelection.task,
+      );
+      onError("切换任务失败，请稍后重试");
+    }
   };
 
   const handleQuickAddTask = async (e: React.FormEvent) => {
@@ -93,19 +131,54 @@ export function IdlePanel({
     const title = newTaskTitle.trim();
     if (!title) return;
     onError(null);
-    setBusyQuickAdd(true);
-    const result = await quickAddTaskAction({
-      goalId: selection.goal.id,
+    setNewTaskTitle("");
+
+    const goalId = selection.goal.id;
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const optimisticTask: Task = {
+      id: tempId,
+      goalId,
       title,
-    });
-    if (result.ok) {
-      setNewTaskTitle("");
-      // Creating a Task never changes the selection (goal-only survives).
-      await onRefresh();
-    } else {
-      onError(result.error.message);
+      description: null,
+      status: "pending",
+      position: (todos[todos.length - 1]?.position ?? 0) + 1,
+      estimatedMinutes: null,
+      resourceType: null,
+      resourceValue: null,
+      note: null,
+      completedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    onOptimisticTaskAdd?.(optimisticTask);
+
+    try {
+      const result = await quickAddTaskAction({
+        goalId,
+        title,
+      });
+
+      if (result.ok && result.data[0]) {
+        const createdTask = result.data[0];
+        onOptimisticTaskResolve?.(tempId, createdTask);
+        setFetched((prev) =>
+          prev && prev.goalId === goalId
+            ? { ...prev, tasks: [...prev.tasks, createdTask] }
+            : prev,
+        );
+        // Non-blocking background sync for final consistency.
+        void onRefresh();
+      } else {
+        onOptimisticTaskRevert?.(tempId, goalId);
+        setNewTaskTitle((prev) => (prev ? prev : title));
+        onError(result.ok ? "创建任务失败" : result.error.message);
+      }
+    } catch {
+      onOptimisticTaskRevert?.(tempId, goalId);
+      setNewTaskTitle((prev) => (prev ? prev : title));
+      onError("网络请求失败，请稍后重试");
     }
-    setBusyQuickAdd(false);
   };
 
   const pendingCount =
@@ -115,7 +188,8 @@ export function IdlePanel({
   return (
     <div className="space-y-10">
       <div className="flex flex-col items-center pt-2">
-        <div className="flex w-full flex-col items-center gap-1 sm:flex-row sm:justify-center sm:gap-2">
+        {/* Execution context switcher: one segmented pill for 目标 + 任务. */}
+        <div className="flex w-full flex-col items-stretch rounded-2xl border border-stone-200 bg-white p-1.5 shadow-[0_1px_2px_rgba(28,25,23,0.05)] sm:w-auto sm:flex-row sm:items-center sm:rounded-full sm:p-1">
           <SwitchSelect
             label="目标"
             value={selection.goal.id}
@@ -125,9 +199,10 @@ export function IdlePanel({
               label: item.goal.title,
             }))}
           />
-          <span className="hidden text-stone-300 sm:inline" aria-hidden="true">
-            ·
-          </span>
+          <span
+            aria-hidden="true"
+            className="h-px w-full bg-stone-100 sm:mx-1 sm:h-5 sm:w-px sm:bg-stone-200"
+          />
           <SwitchSelect
             label="任务"
             value={selection.task?.id ?? ""}
@@ -135,16 +210,18 @@ export function IdlePanel({
               void handleSelectTask(selection.goal.id, taskId || null)
             }
             options={[
-              { value: "", label: "仅围绕目标执行" },
-              ...taskOptions.map((task) => ({
-                value: task.id,
-                label: task.title,
-              })),
+              { value: "", label: "不设任务" },
+              ...taskOptions
+                .filter((task) => !task.id.startsWith("temp-"))
+                .map((task) => ({
+                  value: task.id,
+                  label: task.title,
+                })),
             ]}
           />
         </div>
 
-        <div className="mt-9 space-y-2 text-center">
+        <div className="mt-7 space-y-2 text-center sm:mt-9">
           {!selection.goalOnly && (
             <p className="text-sm text-stone-500">{selection.goal.title}</p>
           )}
@@ -166,11 +243,16 @@ export function IdlePanel({
           </p>
         )}
 
-        <div className="mt-8 flex items-center justify-center sm:mt-10">
-          <FocusClock value="00:00" aria-hidden="true" />
+        <div className="mt-7 flex flex-col items-center sm:mt-9">
+          <FocusClock value="00:00" tone="idle" aria-hidden="true" />
+          <p className="mt-4">
+            <span className="inline-flex items-center rounded-full bg-stone-100 px-2.5 py-0.5 text-xs font-medium text-stone-500">
+              准备开始
+            </span>
+          </p>
         </div>
 
-        <div className="mt-8 flex w-full flex-col items-center gap-3 sm:mt-10">
+        <div className="mt-7 flex w-full flex-col items-center gap-3 sm:mt-8">
           <Button
             size="lg"
             disabled={busy !== "none"}
@@ -229,19 +311,32 @@ export function IdlePanel({
 
       <section
         aria-labelledby="todos-title"
-        className="space-y-3 rounded-2xl border border-stone-200 bg-stone-50 p-5 sm:p-6"
+        className="space-y-4 rounded-2xl border border-stone-200 bg-stone-50 p-5 sm:p-6"
       >
-        <div className="flex items-baseline justify-between gap-4">
-          <h2 id="todos-title" className="text-sm font-semibold text-stone-800">
-            目标任务
-          </h2>
-          <span className="text-xs text-stone-400">
-            {pendingCount} 项未完成
-          </span>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-baseline gap-2">
+            <h2
+              id="todos-title"
+              className="text-sm font-semibold text-stone-800"
+            >
+              目标任务
+            </h2>
+            <span className="text-xs text-stone-400">
+              {pendingCount} 项未完成
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="xs"
+            nativeButton={false}
+            render={<Link href="/goals" />}
+            className="gap-0.5 text-stone-500"
+          >
+            管理
+            <ArrowUpRight className="size-3" aria-hidden="true" />
+          </Button>
         </div>
-        <p className="text-xs leading-5 text-stone-500">
-          任务会持续保留。点击一项，即可设为本次专注内容。
-        </p>
+
         <form onSubmit={handleQuickAddTask} className="flex items-center gap-2">
           <Input
             value={newTaskTitle}
@@ -255,41 +350,100 @@ export function IdlePanel({
             size="sm"
             variant="outline"
             className="h-10 bg-white"
-            disabled={busyQuickAdd || !newTaskTitle.trim()}
+            disabled={!newTaskTitle.trim()}
           >
             <Plus className="size-3.5" aria-hidden="true" />
             创建
           </Button>
         </form>
+
         {todos.length > 0 ? (
-          <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white">
-            {todos.map((task) => (
-              <li
-                key={task.id}
-                className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
+          <>
+            <p className="text-xs text-stone-400">
+              点击任务设为本次专注；再次点击可取消。
+            </p>
+            <ul className="divide-y divide-stone-100 overflow-hidden rounded-xl border border-stone-200 bg-white">
+              {todos.map((task) => {
+                const selected = selection.task?.id === task.id;
+                const isOptimistic = task.id.startsWith("temp-");
+                return (
+                  <li key={task.id}>
+                    <button
+                      type="button"
+                      disabled={isOptimistic}
+                      aria-pressed={selected}
+                      onClick={() =>
+                        void handleSelectTask(
+                          selection.goal.id,
+                          selected ? null : task.id,
+                        )
+                      }
+                      className={`group flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition-colors ${
+                        selected ? "bg-[#fdf6f1]" : "hover:bg-stone-50"
+                      } ${isOptimistic ? "cursor-default opacity-75" : ""}`}
+                    >
+                      {isOptimistic ? (
+                        <Loader2
+                          className="size-4 shrink-0 animate-spin text-stone-400"
+                          aria-hidden="true"
+                        />
+                      ) : selected ? (
+                        <CircleCheck
+                          className="size-4 shrink-0 text-[#d85c41]"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <Circle
+                          className="size-4 shrink-0 text-stone-300"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span
+                        className={`min-w-0 flex-1 truncate ${
+                          selected
+                            ? "font-medium text-stone-950"
+                            : "text-stone-700"
+                        }`}
+                      >
+                        {task.title}
+                      </span>
+                      <span
+                        className={`shrink-0 text-xs ${
+                          isOptimistic
+                            ? "text-stone-400"
+                            : selected
+                              ? "font-medium text-[#b54b35]"
+                              : "hidden text-stone-400 group-hover:inline"
+                        }`}
+                      >
+                        {isOptimistic
+                          ? "创建中…"
+                          : selected
+                            ? "本次专注"
+                            : "设为本次"}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {pendingCount > todos.length && (
+              <Link
+                href="/goals"
+                className="flex items-center justify-center gap-1 rounded-xl border border-dashed border-stone-200 py-2.5 text-xs text-stone-500 transition-colors hover:border-stone-300 hover:text-stone-800"
               >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 truncate text-left text-stone-700 hover:text-stone-950"
-                  onClick={() =>
-                    void handleSelectTask(selection.goal.id, task.id)
-                  }
-                >
-                  <span className="mr-2 text-xs text-stone-400 tabular-nums">
-                    {task.position}
-                  </span>
-                  {task.title}
-                </button>
-                <span className="shrink-0 text-xs text-stone-400">
-                  {taskStatusLabel[task.status]}
-                </span>
-              </li>
-            ))}
-          </ul>
+                还有 {pendingCount - todos.length} 项未完成，到管理页查看全部
+                <ArrowUpRight className="size-3.5" aria-hidden="true" />
+              </Link>
+            )}
+          </>
         ) : (
-          <p className="px-1 py-3 text-sm text-stone-500">
-            这个目标还没有任务。可以直接围绕目标专注，也可以先创建一项。
-          </p>
+          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-stone-200 bg-white/60 px-4 py-7 text-center">
+            <ListTodo className="size-5 text-stone-300" aria-hidden="true" />
+            <p className="max-w-xs text-sm leading-6 text-stone-500">
+              还没有任务。可以直接围绕目标专注，或在上面创建一项。
+            </p>
+          </div>
         )}
       </section>
     </div>
@@ -315,10 +469,10 @@ function SwitchSelect({
     >
       <SelectTrigger
         aria-label={label}
-        className="h-9 max-w-64 min-w-0 gap-2 border-stone-200 bg-white px-3 text-stone-800 shadow-none hover:border-stone-300"
+        className="h-9 w-full min-w-0 gap-1.5 rounded-[10px] border-transparent bg-transparent px-3 text-stone-800 shadow-none hover:bg-stone-100 sm:w-auto sm:max-w-56 sm:rounded-full sm:px-3.5"
       >
         <span className="shrink-0 text-xs text-stone-400">{label}</span>
-        <SelectValue className="max-w-44 min-w-0 font-medium text-stone-900" />
+        <SelectValue className="min-w-0 flex-1 text-left font-medium text-stone-900" />
       </SelectTrigger>
       <SelectContent
         align="start"

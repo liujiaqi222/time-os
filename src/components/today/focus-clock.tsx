@@ -12,7 +12,8 @@ export function FocusClock({
   ...rest
 }: React.ComponentProps<"div"> & {
   value: string;
-  tone?: "running" | "paused";
+  /** `idle` softens the not-yet-started 00:00 on the execution home. */
+  tone?: "running" | "paused" | "idle";
 }) {
   const groups = value.split(":");
   const wide = value.length > 5;
@@ -24,7 +25,11 @@ export function FocusClock({
         wide
           ? "text-[3.35rem] sm:text-[5.75rem]"
           : "text-[4.75rem] sm:text-[7.25rem]",
-        tone === "paused" ? "text-stone-400" : "text-stone-950",
+        tone === "paused"
+          ? "text-stone-400"
+          : tone === "idle"
+            ? "text-stone-300"
+            : "text-stone-950",
         className,
       )}
       style={{ fontVariantNumeric: "tabular-nums lining-nums" }}

@@ -41,8 +41,10 @@ export function PrimaryNav({ variant }: { variant: "desktop" | "mobile" }) {
               nativeButton={false}
               className={cn(
                 "rounded-lg px-3 text-stone-600",
+                // hover:text-white beats the ghost variant's hover:text-foreground,
+                // which would turn the label dark on the dark active pill.
                 isCurrent &&
-                  "bg-[#26231f] text-white shadow-sm hover:bg-stone-800",
+                  "bg-[#26231f] text-white shadow-sm hover:bg-stone-800 hover:text-white",
               )}
               render={
                 <Link

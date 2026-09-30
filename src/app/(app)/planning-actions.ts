@@ -122,13 +122,24 @@ export async function createTasksAction(formData: FormData): Promise<void> {
   );
 }
 
-export async function updateTaskAction(formData: FormData): Promise<void> {
-  await run(() =>
+export async function updateTaskAction(
+  _previousState: PlanningStatusState,
+  formData: FormData,
+): Promise<PlanningStatusState> {
+  await authorize();
+  const result = await planningContract(() =>
     planningService.updateTask(context, {
       id: String(formData.get("id")),
       title: String(formData.get("title") ?? ""),
     }),
   );
+
+  if (!result.ok)
+    return { status: "error", message: statusErrorMessage(result.error) };
+
+  revalidatePath("/goals");
+  revalidatePath("/today");
+  return { status: "success" };
 }
 
 export async function reorderTasksAction(

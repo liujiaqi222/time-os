@@ -161,7 +161,7 @@ test.describe("Goal-direct execution loop", () => {
     // Switch to explicit goal-only execution.
     await page.goto("/today");
     await page.getByLabel("任务", { exact: true }).click();
-    await page.getByRole("option", { name: "仅围绕目标执行" }).click();
+    await page.getByRole("option", { name: /不设任务|仅围绕目标执行/ }).click();
     await expect(
       page.getByRole("heading", { name: /围绕目标执行|Ship Execution Loop/ }),
     ).toBeVisible();
