@@ -49,7 +49,7 @@ Time OS 帮用户围绕目标开始执行、留下进展，并在下次打开时
 
 本轮不做：习惯 / 重复任务系统、今日重点对象、每日必填计划、专用最小行动模块、十二周周期、WOOP 表单、自定义领先指标、计划达成率、目标完成百分比、生产力评分、周期复盘系统、内置 AI 聊天 / 自动教练、复杂计时预设、循环编排、排行榜与奖励体系。用户可在说明中写行动约定，不由此产生排程或评分功能。
 
-不新增日历集成、子任务树、看板、甘特图、附件、富文本、原生 App、浏览器扩展、多用户、OAuth 或 hard delete。可选到时提示音属于计时反馈；后台推送与定时提醒服务不属于本轮。
+不新增日历集成、子任务树、看板、甘特图、附件、富文本、原生 App、浏览器扩展、多用户、第三方社交登录或 hard delete。ChatGPT Plugin 所需的 OAuth 2.1 授权服务属于 MCP 安全边界，不扩张为通用身份平台。可选到时提示音属于计时反馈；后台推送与定时提醒服务不属于本轮。
 
 ## 3. 核心模型与状态
 
@@ -126,7 +126,7 @@ v3 运行模型只保留 Goal、Task、Session 及必需内部记录。Task 与 
 
 ### 4.2 AI 路径
 
-逐步展示 Codex / Claude 中实际支持的连接方式、当前实例 endpoint 与 token 占位配置。真实 token 从部署环境取得并填入客户端，不由 Web 读取、回显或存储。实现时核实对应客户端格式，不假设有一键安装插件。
+逐步展示 ChatGPT 网页端 Plugin 的开发者模式连接方式与当前实例 `/mcp` endpoint。ChatGPT 作为 OAuth client，通过 authorization-code + PKCE 获取限时令牌；用户不复制静态 token，Web 不读取、回显或存储 access / refresh token。连接成功必须由 ChatGPT 实际工具调用证明。
 
 说明 AI 可读写本实例计划与记录；提供可复制的开场话术，先讨论目标和第一步，经用户确认后写入。讨论留在客户端。
 
@@ -311,9 +311,9 @@ Web 展示可理解的恢复动作，MCP 返回 code / message / 必需 context�
 
 ### 9.4 身份与自托管
 
-沿用 `DATABASE_URL`、`TIMEOS_WEB_PASSWORD`、`TIMEOS_MCP_TOKEN`、`TIMEOS_SESSION_SECRET`。Web 为单用户密码登录，Cookie 使用 HttpOnly、生产 Secure、SameSite=Lax 和 90 天滑动有效期；登出失效，Secret 轮换使旧会话失效。保留登录退避与写请求同源保护。
+使用 `DATABASE_URL`、`BETTER_AUTH_SECRET` 与实例公开 `BETTER_AUTH_URL`。Web 仍是单实例单用户，但首次访问在数据库中建立 owner 账户；Cookie 使用 HttpOnly、生产 Secure、SameSite=Lax 和 90 天滑动有效期。登出失效，Secret 轮换使旧会话与令牌失效；登录与写请求继续具备速率限制和同源保护。
 
-MCP 使用 `/mcp` Streamable HTTP 与独立 Bearer token，stateless adapter，持久状态在数据库。Web Password 与 token 不互换。真实密钥不进入页面、客户端存储或日志；页面只显示 endpoint 与占位符。
+MCP 使用 `/mcp` Streamable HTTP 与 OAuth 2.1 authorization-code + PKCE。ChatGPT Plugin 是 OAuth client，Time OS 同时是 authorization server 与 resource server：发布 protected-resource / authorization-server metadata，以 CIMD 确认 ChatGPT 客户端，并按 `timeos:read`、`timeos:write` scope 签发 audience 绑定的短期 access token 与可撤销 refresh token。用户在 Time OS 登录及确认授权；ChatGPT 不接触实例密码，网页也不展示静态 MCP token。
 
 部署运行提交的建库 / schema migration，Setup 不自行建表。验证新版本空库初始化，不要求旧库升级；本轮不扩张为新的部署平台功能。对外发布前以实际环境复验文档描述，未进行线上验证则明确标注。
 

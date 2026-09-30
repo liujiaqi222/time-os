@@ -1,12 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Clock3, Flame, Plus, Target } from "lucide-react";
+import { Clock3, Flame } from "lucide-react";
 
 import {
   cancelSessionAction,
   completeTaskAction,
-  createGoalAction,
   finishSessionAction,
   getDashboardAction,
   getSessionAction,
@@ -14,7 +13,6 @@ import {
   updateResumeHintAction,
 } from "@/app/(app)/session-actions";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { EndCard } from "@/components/today/end-card";
 import { IdlePanel } from "@/components/today/idle-panel";
@@ -33,9 +31,11 @@ import { formatHumanDuration } from "@/shared/session-timer";
 export function TodayView({
   initialDashboard,
   initialHeadline,
+  firstRun = false,
 }: {
   initialDashboard: DashboardData;
   initialHeadline: string;
+  firstRun?: boolean;
 }) {
   const [dashboard, setDashboard] = useState(initialDashboard);
   const [busy, setBusy] = useState<RunBusyAction>("none");
@@ -47,8 +47,6 @@ export function TodayView({
   const [endCard, setEndCard] = useState<SessionView | null>(null);
   const [completionMoment, setCompletionMoment] = useState(0);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [newGoalTitle, setNewGoalTitle] = useState("");
-  const [busyGoal, setBusyGoal] = useState(false);
 
   // The Session this page believes is running; null when idle/none.
   const runningIdRef = useRef<string | null>(
@@ -349,25 +347,7 @@ export function TodayView({
     [],
   );
 
-  // ---- Empty state ----------------------------------------------------------
-
-  const handleCreateFirstGoal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const title = newGoalTitle.trim();
-    if (!title) return;
-    setBusyGoal(true);
-    setActionError(null);
-    const result = await createGoalAction({ title });
-    if (result.ok) {
-      setNewGoalTitle("");
-      await refresh();
-    } else {
-      setActionError(result.error.message);
-    }
-    setBusyGoal(false);
-  };
-
-  const { activeSession, selection, goals, todayStats } = dashboard;
+  const { activeSession, selection, todayStats } = dashboard;
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 pb-6">
@@ -462,6 +442,7 @@ export function TodayView({
           ) : selection ? (
             <IdlePanel
               dashboard={dashboard}
+              firstRun={firstRun}
               busy={busy === "start" ? "start" : "none"}
               onStart={(input) => void handleStart(input)}
               onRefresh={refresh}
@@ -472,43 +453,9 @@ export function TodayView({
               onOptimisticSelectTask={handleOptimisticSelectTask}
             />
           ) : (
-            <div className="flex flex-col items-start gap-5 py-8 sm:px-6">
-              <div className="space-y-2">
-                <span className="flex size-11 items-center justify-center rounded-2xl bg-[#f7e0d7] text-[#b54b35]">
-                  <Target className="size-5" aria-hidden="true" />
-                </span>
-                <h2 className="pt-3 text-2xl font-semibold tracking-tight">
-                  {goals.length === 0
-                    ? "最近，有什么事是你真的想推进的？"
-                    : "当前没有可执行的目标"}
-                </h2>
-                <p className="text-sm leading-6 text-stone-500">
-                  输入一个目标标题即可开始。目标只在这里创建，一次专注也只需要一次点击。
-                </p>
-              </div>
-              <form
-                onSubmit={handleCreateFirstGoal}
-                className="flex w-full flex-col gap-2 sm:flex-row"
-              >
-                <Input
-                  value={newGoalTitle}
-                  onChange={(e) => setNewGoalTitle(e.target.value)}
-                  placeholder="例如：把产品介绍页改完"
-                  maxLength={240}
-                  className="h-11 flex-1 bg-white/70 text-base"
-                  aria-label="目标标题"
-                />
-                <Button
-                  type="submit"
-                  size="lg"
-                  disabled={busyGoal || !newGoalTitle.trim()}
-                  className="h-11 gap-1.5 rounded-full px-4"
-                >
-                  <Plus className="size-4" aria-hidden="true" />
-                  {busyGoal ? "创建中…" : "创建目标"}
-                </Button>
-              </form>
-            </div>
+            <p className="py-10 text-center text-sm text-stone-500">
+              当前没有可执行的目标，请从目标管理中重新启用或创建一个目标。
+            </p>
           )}
         </div>
       </main>

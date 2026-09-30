@@ -10,9 +10,15 @@ const postgresqlUrl = z.url().refine(
 
 export const serverEnvironmentSchema = z.object({
   DATABASE_URL: postgresqlUrl,
-  TIMEOS_WEB_PASSWORD: z.string().min(12),
-  TIMEOS_MCP_TOKEN: z.string().min(32),
-  TIMEOS_SESSION_SECRET: z.string().min(32),
+  BETTER_AUTH_SECRET: z.string().min(32),
+  BETTER_AUTH_URL: z.url().refine((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+    );
+  }, "BETTER_AUTH_URL must use HTTPS, except on a loopback host."),
 });
 
 export type ServerEnvironment = z.infer<typeof serverEnvironmentSchema>;

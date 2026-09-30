@@ -2,8 +2,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { Settings } from "lucide-react";
 
-import { logoutAction } from "@/app/actions";
 import { ActiveSessionBanner } from "@/components/active-session-banner";
+import { LogoutButton } from "@/components/logout-button";
 import { PrimaryNav } from "@/components/primary-nav";
 import { Button } from "@/components/ui/button";
 import type { SessionView } from "@/services/session";
@@ -39,16 +39,7 @@ export function AppShell({
               >
                 <Settings aria-hidden="true" />
               </Button>
-              <form action={logoutAction}>
-                <Button
-                  type="submit"
-                  variant="ghost"
-                  size="sm"
-                  className="rounded-full text-stone-500"
-                >
-                  退出
-                </Button>
-              </form>
+              <LogoutButton />
             </div>
           </div>
         </header>

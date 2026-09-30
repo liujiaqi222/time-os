@@ -43,9 +43,11 @@
 
 ### 3. AI 路径
 
-- [ ] 提供 Codex / Claude 的选择，说明客户端能够读取和更新该实例目标与记录。
-- [ ] 实现前核对实际客户端支持的连接方式，形成可重复操作的连接说明；引用对应官方文档并记下验证日期。不要硬编码未经验证的格式或假“一键插件”。
-- [ ] 显示当前实例 endpoint、可复制的占位配置与客户端填写位置。真实 token 从部署环境取得，不增加 Web token 读取接口。
+实现核对（2026-09-30）：依据 OpenAI 官方的 [Authentication](https://developers.openai.com/plugins/build/auth)、[Connect and test](https://developers.openai.com/plugins/deploy/connect-chatgpt) 与 [Tool reference](https://developers.openai.com/plugins/reference)，采用 ChatGPT 稳定 CIMD client id、OAuth 2.1 authorization-code + PKCE、protected-resource / authorization-server metadata 和逐工具安全声明。本地已用真实 ChatGPT client metadata 跑通登录、授权同意和返回官方 callback；公开 HTTPS 下的 ChatGPT Plugin 连接及写回留作人工验收。
+
+- [ ] 提供 ChatGPT 网页端 Plugin 路径，说明它能够读取和更新该实例目标与记录。
+- [ ] 实现前核对 ChatGPT Plugin 的实际连接方式，形成可重复操作的开发者模式连接说明；引用官方文档并记下验证日期。
+- [ ] 显示当前实例 endpoint 与 ChatGPT 中的填写位置。使用 OAuth 2.1 authorization-code + PKCE，不向用户展示或要求复制静态 MCP token。
 - [ ] 提供开场话术：讨论目标与第一步，经用户认可后用 v3 工具写入；不默认批量生成几十项任务。
 - [ ] 提供“检查已保存目标”，调用 Goal list；无结果明确说明尚未保存，保留切换手动入口。
 - [ ] 一个结果显示目标卡片，多结果让用户选；用户确认只选择该 Goal，不重新创建。AI 已填任务 / 说明无需重填。
@@ -85,7 +87,7 @@
 - Integration：Goal 创建幂等与 key 冲突、AI/Web 并发写入后读取、归档后的 start 拒绝。
 - E2E：手动仅标题 → 执行；中途返回 / 刷新；保存错误再重试；所有目标非 active 时仍可访问足迹；375px 键盘遮挡检查。
 - MCP：真实客户端完成连接与 Goal/Task 写入，再在浏览器确认进入执行；仅 mock Goal list 不能代替真实连接证据。
-- Security：检查网络与浏览器存储不含真实 MCP token；保持现有 Cookie / 密码行为。
+- Security：检查网络与浏览器存储不含 access / refresh token；Web Cookie 与 MCP OAuth 由同一 owner 身份授权，scope、audience、撤销均生效。
 - 提供三幕桌面与移动端实际截图，验证文字过长和 reduced motion；运行公共检查。
 
 ### Acceptance checklist
@@ -99,4 +101,4 @@
 
 ## 不在本票范围
 
-内置 AI 对话、LLM key、OAuth 自动连接、token 管理后台、完整任务管理、习惯或复盘系统、番茄状态机、旧客户端兼容。
+内置 AI 对话、LLM key、完整任务管理、习惯或复盘系统、番茄状态机、旧客户端兼容。

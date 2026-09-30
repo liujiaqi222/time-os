@@ -39,6 +39,7 @@ import type { DashboardData } from "@/services/dashboard";
  */
 export function IdlePanel({
   dashboard,
+  firstRun = false,
   busy,
   onStart,
   onRefresh,
@@ -49,6 +50,7 @@ export function IdlePanel({
   onOptimisticSelectTask,
 }: {
   dashboard: DashboardData;
+  firstRun?: boolean;
   busy: "none" | "start";
   onStart: (input: { intent: string | null }) => void;
   onRefresh: () => Promise<unknown>;
@@ -260,7 +262,11 @@ export function IdlePanel({
             className="h-13 w-full max-w-xs gap-2 rounded-xl bg-[#d85c41] px-6 text-base text-white shadow-sm hover:bg-[#c84f36]"
           >
             <Play className="size-4 fill-current" aria-hidden="true" />
-            {busy === "start" ? "开始中…" : "开始专注"}
+            {busy === "start"
+              ? "开始中…"
+              : firstRun
+                ? "开始第一次执行"
+                : "开始专注"}
           </Button>
           {showIntent ? (
             <div className="w-full max-w-sm rounded-xl border border-stone-200 bg-stone-50 p-3 text-left">

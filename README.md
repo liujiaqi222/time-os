@@ -1,12 +1,12 @@
 # Time OS
 
-Time OS 是一个 AI-native 的目标执行与时间管理工具。它记住每条推进线的下一步，并记录你真正投入的时间；你仍然可以在 ChatGPT、Claude 或 Codex 中讨论和调整计划。
+Time OS 是一个 AI-native 的目标执行与时间管理工具。它记住目标的下一步，并记录你真正投入的时间；你也可以在 ChatGPT 网页端讨论计划，并通过 Plugin 写回当前实例。
 
 > **AI is the planner. Time OS is the execution system.**
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fliujiaqi222%2Ftime-os&project-name=time-os&repository-name=time-os&integration-ids=oac_3sK3gnG06emjIEVL09jjntDD&env=TIMEOS_WEB_PASSWORD%2CTIMEOS_MCP_TOKEN%2CTIMEOS_SESSION_SECRET%2CNEXT_PUBLIC_APP_NAME&envDefaults=%7B%22NEXT_PUBLIC_APP_NAME%22%3A%22Time%20OS%22%7D&envDescription=Set%20a%20web%20password%20and%20two%20unique%20random%20secrets.%20Neon%20provides%20DATABASE_URL%20automatically.)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fliujiaqi222%2Ftime-os&project-name=time-os&repository-name=time-os&integration-ids=oac_3sK3gnG06emjIEVL09jjntDD&env=BETTER_AUTH_SECRET%2CNEXT_PUBLIC_APP_NAME&envDefaults=%7B%22NEXT_PUBLIC_APP_NAME%22%3A%22Time%20OS%22%7D&envDescription=Set%20one%20unique%20random%20authentication%20secret.%20Neon%20provides%20DATABASE_URL%20automatically.)
 
-一键部署会克隆仓库、创建并连接 Neon、收集实例 Secret，并在构建阶段自动执行 committed Drizzle migrations。部署完成后访问应用，使用 `TIMEOS_WEB_PASSWORD` 登录并完成 Setup。每个部署是一个独立的单用户实例。
+一键部署会克隆仓库、创建并连接 Neon、收集认证 Secret，并在构建阶段自动执行 committed Drizzle migrations。部署完成后访问应用，首次打开时设置实例密码，再完成时区与第一个目标引导。每个部署是一个独立的单用户实例。
 
 ## Local development
 
@@ -26,10 +26,11 @@ pnpm dev
 环境变量：
 
 - `DATABASE_URL`：Neon 或兼容 PostgreSQL 连接串；
-- `TIMEOS_WEB_PASSWORD`：网页登录密码；
-- `TIMEOS_MCP_TOKEN`：MCP Bearer Token，至少 32 个字符；
-- `TIMEOS_SESSION_SECRET`：Cookie 签名 Secret，至少 32 个字符；
+- `BETTER_AUTH_SECRET`：Web Session 与 OAuth 令牌使用的服务端 Secret，至少 32 个字符；
+- `BETTER_AUTH_URL`：实例公开 origin；生产必须是 HTTPS。Vercel 可从 `VERCEL_PROJECT_PRODUCTION_URL` 自动推导，自定义域名时应显式填写；
 - `NEXT_PUBLIC_APP_NAME`：可选的公开应用名称。
+
+ChatGPT Plugin 使用 OAuth 2.1 连接 `/mcp`。用户在 Time OS 登录并确认读写权限后，ChatGPT 才会获得限时 access token；网页不展示、复制或保存静态 MCP Token。
 
 ## Verification
 

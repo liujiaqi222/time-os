@@ -1,4 +1,7 @@
+import { headers } from "next/headers";
 import { SettingsForm } from "@/components/settings-form";
+import { disconnectChatGptAction } from "@/app/settings/actions";
+import { auth, MCP_RESOURCE } from "@/auth/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { settingsService } from "@/services";
@@ -6,7 +9,17 @@ import { timerModeLabel } from "@/shared/labels";
 import Link from "next/link";
 
 export default async function SettingsPage() {
-  const settings = await settingsService.get({ actor: "web" });
+  const [settings, consents] = await Promise.all([
+    settingsService.get({ actor: "web" }),
+    auth.api.getOAuthConsents({ headers: await headers() }),
+  ]);
+  const chatGptConsents = consents.filter((consent) => {
+    try {
+      return new URL(consent.clientId).hostname === "chatgpt.com";
+    } catch {
+      return false;
+    }
+  });
   return (
     <div className="max-w-2xl space-y-8">
       <header className="space-y-2">
@@ -48,16 +61,46 @@ export default async function SettingsPage() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>MCP 地址</CardTitle>
+          <CardTitle>ChatGPT 连接</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm text-stone-600">
-          <code className="rounded bg-stone-100 px-2 py-1 text-stone-900">
-            /mcp
-          </code>
+        <CardContent className="space-y-4 text-sm text-stone-600">
           <p>
-            Authorization: Bearer YOUR_MCP_TOKEN。出于安全考虑，真实 Token
-            永不回显。
+            在 ChatGPT 网页端的 Plugins 中添加这个 MCP 地址。连接时会回到 Time
+            OS 登录并显示授权确认；无需复制 API Token。
           </p>
+          <code className="block overflow-x-auto rounded-lg bg-stone-100 px-3 py-2 text-xs text-stone-900">
+            {MCP_RESOURCE}
+          </code>
+          {chatGptConsents.length === 0 ? (
+            <p className="text-stone-500">当前没有已授权的 ChatGPT 连接。</p>
+          ) : (
+            <div className="space-y-2">
+              {chatGptConsents.map((consent) => (
+                <div
+                  key={consent.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50 p-3"
+                >
+                  <div>
+                    <p className="font-medium text-stone-900">ChatGPT</p>
+                    <p className="mt-0.5 text-xs text-stone-500">
+                      已授权读取与写入 Time OS
+                    </p>
+                  </div>
+                  <form
+                    action={disconnectChatGptAction.bind(
+                      null,
+                      consent.id,
+                      consent.clientId,
+                    )}
+                  >
+                    <Button type="submit" variant="outline" size="sm">
+                      撤销连接
+                    </Button>
+                  </form>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

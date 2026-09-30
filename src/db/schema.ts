@@ -266,24 +266,6 @@ export const idempotencyRecords = pgTable(
   (table) => [primaryKey({ columns: [table.operation, table.key] })],
 );
 
-export const loginAttempts = pgTable(
-  "login_attempts",
-  {
-    identityHash: varchar("identity_hash", { length: 64 }).primaryKey(),
-    failedCount: integer("failed_count").default(0).notNull(),
-    windowStartedAt: timestamp("window_started_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    blockedUntil: timestamp("blocked_until", { withTimezone: true }),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    check("login_attempts_failed_nonnegative", sql`${table.failedCount} >= 0`),
-  ],
-);
-
 export type AppSettings = typeof appSettings.$inferSelect;
 export type Goal = typeof goals.$inferSelect;
 export type Task = typeof tasks.$inferSelect;

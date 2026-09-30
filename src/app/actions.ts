@@ -1,9 +1,11 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { clearWebSession } from "@/auth/web-session";
+
+import { auth } from "@/auth/auth";
 
 export async function logoutAction(): Promise<never> {
-  await clearWebSession();
+  await auth.api.signOut({ headers: await headers() });
   redirect("/login");
 }

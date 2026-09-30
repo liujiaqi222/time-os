@@ -96,14 +96,25 @@ describe("committed migrations (empty-database initialization)", () => {
     );
 
     expect(result.rows.map((row) => row.table_name)).toEqual([
+      "account",
       "app_settings",
       "distractions",
       "focus_intervals",
       "goals",
       "idempotency_records",
-      "login_attempts",
+      "jwks",
+      "oauth_access_token",
+      "oauth_client",
+      "oauth_client_assertion",
+      "oauth_client_resource",
+      "oauth_consent",
+      "oauth_refresh_token",
+      "oauth_resource",
+      "session",
       "sessions",
       "tasks",
+      "user",
+      "verification",
     ]);
   });
 

@@ -4,9 +4,8 @@ import { parseServerEnvironment } from "@/env/schema";
 
 const validEnvironment = {
   DATABASE_URL: "postgresql://timeos:password@localhost:5432/timeos",
-  TIMEOS_WEB_PASSWORD: "correct horse battery staple",
-  TIMEOS_MCP_TOKEN: "mcp-token-that-is-at-least-32-characters",
-  TIMEOS_SESSION_SECRET: "session-secret-that-is-at-least-32-characters",
+  BETTER_AUTH_SECRET: "auth-secret-that-is-at-least-32-characters",
+  BETTER_AUTH_URL: "https://time-os.example.com",
 };
 
 describe("server environment", () => {
@@ -16,14 +15,29 @@ describe("server environment", () => {
     );
   });
 
-  it.each(["TIMEOS_MCP_TOKEN", "TIMEOS_SESSION_SECRET"] as const)(
-    "rejects a weak %s",
-    (key) => {
-      expect(() =>
-        parseServerEnvironment({ ...validEnvironment, [key]: "too-short" }),
-      ).toThrow();
-    },
-  );
+  it("rejects a weak BETTER_AUTH_SECRET", () => {
+    expect(() =>
+      parseServerEnvironment({
+        ...validEnvironment,
+        BETTER_AUTH_SECRET: "too-short",
+      }),
+    ).toThrow();
+  });
+
+  it("allows HTTP only for local development", () => {
+    expect(
+      parseServerEnvironment({
+        ...validEnvironment,
+        BETTER_AUTH_URL: "http://127.0.0.1:3010",
+      }).BETTER_AUTH_URL,
+    ).toBe("http://127.0.0.1:3010");
+    expect(() =>
+      parseServerEnvironment({
+        ...validEnvironment,
+        BETTER_AUTH_URL: "http://time-os.example.com",
+      }),
+    ).toThrow();
+  });
 
   it("rejects a non-PostgreSQL database URL", () => {
     expect(() =>

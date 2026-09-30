@@ -3,7 +3,8 @@ import "server-only";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
-import * as schema from "@/db/schema";
+import * as authSchema from "@/db/auth-schema";
+import * as domainSchema from "@/db/schema";
 import { env } from "@/env";
 
 const globalDatabase = globalThis as unknown as {
@@ -29,5 +30,7 @@ if (process.env.NODE_ENV !== "production") {
   globalDatabase.timeOsPool = pool;
 }
 
-export const db = drizzle({ client: pool, schema });
+export const databaseSchema = { ...domainSchema, ...authSchema };
+export const db = drizzle({ client: pool, schema: domainSchema });
+export const authDb = drizzle({ client: pool, schema: databaseSchema });
 export type Database = typeof db;

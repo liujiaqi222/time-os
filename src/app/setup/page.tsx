@@ -1,6 +1,5 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { CheckCircle2, Database, PlugZap } from "lucide-react";
+import { CheckCircle2, Database } from "lucide-react";
 
 import { readWebSession } from "@/auth/web-session";
 import { SettingsForm } from "@/components/settings-form";
@@ -33,11 +32,6 @@ export default async function SetupPage() {
     );
   }
 
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("host") ?? "your-time-os.vercel.app";
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
-  const endpoint = `${protocol}://${host}/mcp`;
-
   return (
     <main className="min-h-screen bg-[#f4f1ea] px-5 py-12">
       <div className="mx-auto max-w-3xl space-y-8">
@@ -49,7 +43,7 @@ export default async function SetupPage() {
             设置你的执行环境
           </h1>
           <p className="max-w-2xl text-stone-600">
-            数据库已连接。确认时间设置，并保存这个实例的 MCP 地址。
+            数据库已连接。确认时间设置，然后建立第一个真正想推进的目标。
           </p>
         </header>
         <Alert>
@@ -57,44 +51,19 @@ export default async function SetupPage() {
           <AlertTitle>数据库已就绪</AlertTitle>
           <AlertDescription>连接与数据库迁移检查通过。</AlertDescription>
         </Alert>
-        <div className="grid gap-6 md:grid-cols-[1fr_0.9fr]">
-          <Card>
-            <CardHeader>
-              <CardTitle>时间设置</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <SettingsForm
-                mode="setup"
-                timezone={settings.timezone}
-                weekStartsOn={settings.weekStartsOn}
-                suggestBrowserTimezone={!settings.setupCompletedAt}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <PlugZap className="size-5" />
-                MCP 连接
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              <p className="text-stone-600">
-                真实 Token 不会在网页回显。客户端配置中手动替换占位符。
-              </p>
-              <pre className="overflow-x-auto rounded-lg bg-stone-950 p-4 text-xs leading-6 text-stone-100">
-                {JSON.stringify(
-                  {
-                    url: endpoint,
-                    headers: { Authorization: "Bearer YOUR_MCP_TOKEN" },
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </CardContent>
-          </Card>
-        </div>
+        <Card className="max-w-xl">
+          <CardHeader>
+            <CardTitle>时间设置</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <SettingsForm
+              mode="setup"
+              timezone={settings.timezone}
+              weekStartsOn={settings.weekStartsOn}
+              suggestBrowserTimezone={!settings.setupCompletedAt}
+            />
+          </CardContent>
+        </Card>
       </div>
     </main>
   );

@@ -1,37 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { env } from "@/env";
-import {
-  createSessionToken,
-  SESSION_COOKIE_NAME,
-  verifySessionToken,
-} from "@/auth/session-token";
-import { sessionCookieOptions } from "@/auth/web-session";
+import { auth } from "@/auth/auth";
 
 export async function proxy(request: NextRequest) {
-  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-  const session = await verifySessionToken(token, env.TIMEOS_SESSION_SECRET);
+  const session = await auth.api.getSession({ headers: request.headers });
 
-  if (!session.valid) {
+  if (!session) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set(
       "next",
       `${request.nextUrl.pathname}${request.nextUrl.search}`,
     );
-    const response = NextResponse.redirect(loginUrl);
-    response.cookies.delete(SESSION_COOKIE_NAME);
-    return response;
+    return NextResponse.redirect(loginUrl);
   }
 
-  const response = NextResponse.next();
-  if (session.shouldRenew) {
-    response.cookies.set(
-      SESSION_COOKIE_NAME,
-      await createSessionToken(env.TIMEOS_SESSION_SECRET),
-      sessionCookieOptions,
-    );
-  }
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {
@@ -42,5 +25,6 @@ export const config = {
     "/history/:path*",
     "/settings/:path*",
     "/setup/:path*",
+    "/onboarding/:path*",
   ],
 };
