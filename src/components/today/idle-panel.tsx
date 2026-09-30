@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   ArrowUpRight,
   Circle,
-  CircleCheck,
+  CircleDot,
   ListTodo,
   Loader2,
   Play,
@@ -388,7 +388,7 @@ export function IdlePanel({
                           aria-hidden="true"
                         />
                       ) : selected ? (
-                        <CircleCheck
+                        <CircleDot
                           className="size-4 shrink-0 text-[#d85c41]"
                           aria-hidden="true"
                         />
