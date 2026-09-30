@@ -6,7 +6,6 @@ import {
   settingsGetContract,
   settingsUpdateContract,
 } from "@/adapters/settings-contract";
-import { planningContract } from "@/adapters/planning-contract";
 import { sessionContract } from "@/adapters/session-contract";
 import type { DashboardService } from "@/services/dashboard";
 import type { DistractionService } from "@/services/distraction";

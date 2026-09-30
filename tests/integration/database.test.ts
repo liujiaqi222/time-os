@@ -15,7 +15,6 @@ import { createSessionService } from "@/services/session";
 import { createHistoryService } from "@/services/history";
 import { createStatisticsService } from "@/services/statistics";
 import { planningContract } from "@/adapters/planning-contract";
-import { sessionContract } from "@/adapters/session-contract";
 import { createTimeOsMcpServer } from "@/mcp/server";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 
@@ -1099,7 +1098,6 @@ describe("MCP server over the real protocol", () => {
     }
 
     // MCP creates a Goal + Task, starts a goal-only Session.
-    const mcp = { actor: "mcp" } as const;
     const goalCreate = await callTool("goal_create", {
       title: "MCP 创建的目标",
     });

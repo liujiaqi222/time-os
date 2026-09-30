@@ -81,12 +81,6 @@ describe("focusSecondsInRange", () => {
   });
 
   it("counts a zero-duration Session as zero", () => {
-    const session = observedSession({
-      durationSeconds: 0,
-      intervals: [
-        { startedAt: "2026-09-23T09:00:00Z", endedAt: "2026-09-23T09:00:30Z" },
-      ],
-    });
     // Sub-second wall time still rounds to a full second of focus; the
     // zero-duration record only arises when the interval is truly empty.
     const empty = observedSession({
