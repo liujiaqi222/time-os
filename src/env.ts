@@ -2,12 +2,9 @@ import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
 import { serverEnvironmentSchema } from "@/env/schema";
+import { inferPublicOrigin } from "@/shared/public-origin";
 
-const inferredAuthUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
-  ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-  : process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : undefined;
+const inferredAuthUrl = inferPublicOrigin(process.env);
 
 export const env = createEnv({
   server: serverEnvironmentSchema.shape,

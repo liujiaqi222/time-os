@@ -4,14 +4,12 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 
+import { inferPublicOrigin } from "../src/shared/public-origin";
+
 config({ path: [".env.local", ".env"], quiet: true });
 
 const databaseUrl = process.env.DATABASE_URL;
-const inferredAuthUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
-  ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-  : process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : undefined;
+const inferredAuthUrl = inferPublicOrigin(process.env);
 const betterAuthUrl = process.env.BETTER_AUTH_URL ?? inferredAuthUrl;
 
 if (!databaseUrl) {
