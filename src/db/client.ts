@@ -5,6 +5,7 @@ import { Pool } from "pg";
 
 import * as authSchema from "@/db/auth-schema";
 import * as domainSchema from "@/db/schema";
+import { databasePoolOptions } from "@/db/pool-options";
 import { env } from "@/env";
 
 const globalDatabase = globalThis as unknown as {
@@ -15,20 +16,12 @@ const pool =
   globalDatabase.timeOsPool ??
   new Pool({
     connectionString: env.DATABASE_URL,
-    // Allow a request to run several queries in parallel (Promise.all in
-    // services). Neon's pooled endpoint multiplexes clients, so this is safe.
-    max: 10,
-    // Opening a TLS connection to remote Postgres (e.g. Neon behind a proxy)
-    // costs seconds, so keep idle connections around instead of dropping
-    // them after the 10s default and re-paying the handshake every visit.
-    idleTimeoutMillis: 300_000,
-    keepAlive: true,
-    connectionTimeoutMillis: 10_000,
+    ...databasePoolOptions(process.env),
   });
 
-if (process.env.NODE_ENV !== "production") {
-  globalDatabase.timeOsPool = pool;
-}
+// Next.js can evaluate the database module from multiple route bundles inside
+// one process. Reuse one pool in production too, not just during local HMR.
+globalDatabase.timeOsPool = pool;
 
 export const databaseSchema = { ...domainSchema, ...authSchema };
 export const db = drizzle({ client: pool, schema: domainSchema });
