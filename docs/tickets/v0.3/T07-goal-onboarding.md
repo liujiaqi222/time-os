@@ -102,3 +102,12 @@
 ## 不在本票范围
 
 内置 AI 对话、LLM key、完整任务管理、习惯或复盘系统、番茄状态机、旧客户端兼容。
+
+## 交付与验收记录（2026-10-01）
+
+- PR：[#31](https://github.com/liujiaqi222/time-os/pull/31)。本次 AI 客户端范围按开发过程中确认的 ChatGPT 网页端方案交付；Claude 与 Plugin/Skill 工作流留作后续增强。
+- 自动验证：unit 88 项、PostgreSQL integration 23 项、E2E 11 项通过；lint、typecheck、build 通过。后续文档更新不改变运行代码。
+- Vercel HTTPS Preview 部署成功。用户在真实 ChatGPT 客户端完成 OAuth 登录与授权，并确认能正常创建及收到回复。
+- 上述人工证据覆盖真实客户端连接与创建；不扩张为令牌自动续期、撤销后拒绝访问、所有 Web/MCP 交替操作的人工验证。
+- 后续运行验收：AI 创建后回 Web 选择已有目标并开始/结束执行；长期令牌续期与撤销连接。这些场景继续记录具体结果，不能用 mock 或页面按钮状态替代。
+- GitHub issue 中的历史 Codex/Claude、Cookie 与 OAuth 非范围描述已被后续确认的 ChatGPT + Better Auth 方案替代；以本地 PRD 和本票更新后的契约为准。
