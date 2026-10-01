@@ -43,7 +43,7 @@
 
 ### 3. AI 路径
 
-实现核对（2026-09-30）：依据 OpenAI 官方的 [Authentication](https://developers.openai.com/plugins/build/auth)、[Connect and test](https://developers.openai.com/plugins/deploy/connect-chatgpt) 与 [Tool reference](https://developers.openai.com/plugins/reference)，采用 ChatGPT 稳定 CIMD client id、OAuth 2.1 authorization-code + PKCE、protected-resource / authorization-server metadata 和逐工具安全声明。本地已用真实 ChatGPT client metadata 跑通登录、授权同意和返回官方 callback；公开 HTTPS 下的 ChatGPT Plugin 连接及写回留作人工验收。
+实现核对（2026-10-01）：依据 OpenAI 官方的 [Authentication](https://developers.openai.com/plugins/build/auth)、[Connect and test](https://developers.openai.com/plugins/deploy/connect-chatgpt) 与 [Tool reference](https://developers.openai.com/plugins/reference)，采用 ChatGPT 稳定 CIMD client id、OAuth 2.1 authorization-code + PKCE、protected-resource / authorization-server metadata 和逐工具安全声明。当前 ChatGPT Plugins 的直接测试入口为 **Add → Create MCP App**；本地已用真实 ChatGPT client metadata 跑通登录、授权同意和返回官方 callback，公开 HTTPS 下的 MCP App 连接及写回继续人工验收。
 
 - [ ] 提供 ChatGPT 网页端 Plugin 路径，说明它能够读取和更新该实例目标与记录。
 - [ ] 实现前核对 ChatGPT Plugin 的实际连接方式，形成可重复操作的开发者模式连接说明；引用官方文档并记下验证日期。

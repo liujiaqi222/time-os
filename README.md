@@ -30,7 +30,7 @@ pnpm dev
 - `BETTER_AUTH_URL`：实例公开 origin；生产必须是 HTTPS。Vercel Preview 自动使用稳定的分支 URL，Production 自动使用项目生产 URL；自定义域名时应显式填写；
 - `NEXT_PUBLIC_APP_NAME`：可选的公开应用名称。
 
-ChatGPT Plugin 使用 OAuth 2.1 连接 `/mcp`。用户在 Time OS 登录并确认读写权限后，ChatGPT 才会获得限时 access token；网页不展示、复制或保存静态 MCP Token。
+ChatGPT 开发者测试时，在 Plugins 的 Add 菜单中选择 **Create MCP App**，再使用 OAuth 2.1 连接 `/mcp`。用户在 Time OS 登录并确认读写权限后，ChatGPT 才会获得限时 access token；网页不展示、复制或保存静态 MCP Token。
 
 ## Verification
 

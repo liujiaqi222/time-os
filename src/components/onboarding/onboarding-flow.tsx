@@ -377,7 +377,7 @@ function AiStep({
           <Sparkles className="size-5" aria-hidden="true" />
         </span>
         <div>
-          <p className="text-sm font-medium text-[#b54b35]">ChatGPT Plugin</p>
+          <p className="text-sm font-medium text-[#b54b35]">ChatGPT MCP App</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-[-0.035em] text-stone-950 sm:text-4xl">
             先聊清楚，再写回目标
           </h1>
@@ -389,8 +389,10 @@ function AiStep({
       </p>
 
       <ol className="mt-7 space-y-4">
-        <AiInstruction number="1" title="在 ChatGPT 中添加 MCP 连接">
-          <p>打开 Plugin 管理页，创建连接并填写下面的地址。</p>
+        <AiInstruction number="1" title="在 ChatGPT 中创建 MCP App">
+          <p>
+            打开 Plugin 管理页，点击 Add → Create MCP App，再填写下面的地址。
+          </p>
           <a
             href="https://chatgpt.com/plugins"
             target="_blank"
