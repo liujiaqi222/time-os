@@ -1,7 +1,12 @@
 import { createMcpHandler } from "@modelcontextprotocol/server";
+import { requireMcpAuth } from "@better-auth/mcp";
 
-import { hasValidBearerToken } from "@/auth/secrets";
-import { env } from "@/env";
+import {
+  auth,
+  MCP_READ_SCOPE,
+  MCP_RESOURCE,
+  MCP_WRITE_SCOPE,
+} from "@/auth/auth";
 import { logger } from "@/lib/logger";
 import { createTimeOsMcpServer } from "@/mcp/server";
 import {
@@ -31,32 +36,14 @@ const handler = createMcpHandler(
       statisticsService,
     }),
   {
+    legacy: "reject",
     onerror(error) {
       logger.error("MCP request failed", { error: error.message });
     },
   },
 );
 
-export async function POST(request: Request): Promise<Response> {
-  if (
-    !hasValidBearerToken(
-      request.headers.get("authorization"),
-      env.TIMEOS_MCP_TOKEN,
-    )
-  ) {
-    return Response.json(
-      {
-        error: {
-          code: "UNAUTHORIZED",
-          message: "A valid Time OS Bearer token is required.",
-        },
-      },
-      {
-        status: 401,
-        headers: { "WWW-Authenticate": "Bearer" },
-      },
-    );
-  }
-
-  return handler.fetch(request);
-}
+export const POST = requireMcpAuth(auth, (request) => handler.fetch(request), {
+  resource: MCP_RESOURCE,
+  requiredScopes: [MCP_READ_SCOPE, MCP_WRITE_SCOPE],
+});

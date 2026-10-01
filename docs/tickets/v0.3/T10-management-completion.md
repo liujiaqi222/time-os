@@ -47,7 +47,7 @@
 - [ ] 设置分为时间偏好、AI 连接帮助、目标管理入口和退出登录；不把技术字段散落在执行首页。
 - [ ] timezone / weekStartsOn / 三种番茄时长 / 长休息开关读取与保存使用服务端 schema，成功 / 错误 / pending 可感知。
 - [ ] 时区更新重新读取足迹、今日摘要、日期分组；不改 UTC 原始值。运行中修改计时偏好明确下一次执行生效。
-- [ ] AI 帮助复用 T07 的实际连接指南，endpoint 和占位 token；页面、响应与浏览器存储不出现真实密钥。
+- [ ] AI 帮助复用 T07 的 ChatGPT Plugin 连接指南与 `/mcp` endpoint；页面、响应与浏览器存储不出现 access / refresh token。
 - [ ] 退出清理 Web 会话和本地引导草稿，仍保留服务端执行记录与未结束计时；重新登录后恢复状态。
 
 ### 4. 全站页面覆盖
@@ -110,7 +110,7 @@
 - 当前所有受支持领域状态与归属规则有 unit / PostgreSQL integration / contract 证据。
 - 全量 lint、typecheck、unit、integration、E2E、production build 与启动 smoke。
 - 当前源码运行时不再依赖 Track、selectedTrackId、按 Track 的 Next 或 finish outcome；文档存档不纳入死代码判断。
-- 鉴权与 Cookie、Web 密码 / MCP token 分离、token 不暴露维持有效。
+- Web Cookie 与 MCP OAuth access / refresh token 边界清晰，令牌不向页面或浏览器存储暴露。
 - 测试只覆盖新规格；旧测试应替换为等价业务保证，不恢复废弃流程。
 
 ### Acceptance checklist

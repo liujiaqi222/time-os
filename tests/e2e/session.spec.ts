@@ -1,43 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const webPassword = "correct-horse-battery-staple";
-
-async function loginAndSetup(page: Page) {
-  await page.goto("/today");
-  if (page.url().includes("/login")) {
-    await page.getByLabel("实例密码").fill(webPassword);
-    await page.getByRole("button", { name: "进入 Time OS" }).click();
-  }
-  // The unconfigured instance streams a loading skeleton on /today while
-  // the app shell redirects to /setup; only trust /today once the
-  // skeleton is gone, otherwise the redirect hasn't happened yet.
-  await expect
-    .poll(
-      async () => {
-        if (
-          (await page.getByRole("button", { name: "完成设置" }).count()) > 0
-        ) {
-          return "setup";
-        }
-        const busy = await page.locator("main[aria-busy='true']").count();
-        if (page.url().includes("/today") && busy === 0) return "today";
-        return "";
-      },
-      { timeout: 20_000, intervals: [250] },
-    )
-    .toMatch(/^(setup|today)$/);
-  if (page.url().includes("/setup")) {
-    await page.getByLabel("时区").fill("Asia/Shanghai");
-    await page.getByRole("button", { name: "完成设置" }).click();
-    await expect(page).toHaveURL(/\/today$/, { timeout: 15_000 });
-  }
-}
+import { loginAndSetup } from "./helpers";
 
 /** Make sure no unfinished Session blocks the next test (PRD §6.1). */
 async function ensureNoActiveSession(page: Page) {
   await page.goto("/today");
-  const pauseButton = page.getByRole("button", { name: /暂停（Space）/ });
-  if ((await pauseButton.count()) > 0 && (await pauseButton.isVisible())) {
+  const sessionControl = page.getByRole("button", {
+    name: /暂停（Space）|继续（Space）/,
+  });
+  if (
+    (await sessionControl.count()) > 0 &&
+    (await sessionControl.isVisible())
+  ) {
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await page.getByRole("button", { name: "确定取消" }).click();
   }
@@ -174,6 +148,9 @@ test.describe("Goal-direct execution loop", () => {
     // Space pauses without focusing any input first.
     await page.keyboard.press("Space");
     await expect(page.getByText("已暂停")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /继续（Space）/ }),
+    ).toBeEnabled();
     await page.keyboard.press("Space");
     await expect(page.getByText("正计时中")).toBeVisible();
 

@@ -1,66 +1,6 @@
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-const webPassword = "correct-horse-battery-staple";
-const mcpToken = "mcp-token-that-is-at-least-32-characters";
-
-async function readMcpResponse(response: {
-  headers(): Record<string, string>;
-  text(): Promise<string>;
-}) {
-  const text = await response.text();
-  if (!response.headers()["content-type"]?.includes("text/event-stream")) {
-    return JSON.parse(text);
-  }
-  const data = text
-    .split("\n")
-    .filter((line: string) => line.startsWith("data: "))
-    .map((line) => line.slice(6));
-  return JSON.parse(data.at(-1) ?? "null");
-}
-
-async function mcpCall(
-  request: APIRequestContext,
-  id: number,
-  name: string,
-  args: object,
-) {
-  const response = await request.post("/mcp", {
-    data: {
-      jsonrpc: "2.0",
-      id,
-      method: "tools/call",
-      params: { name, arguments: args },
-    },
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${mcpToken}`,
-      "mcp-protocol-version": "2025-11-25",
-    },
-  });
-  expect(response.status()).toBe(200);
-  const parsed = await readMcpResponse(response);
-  return parsed.result.structuredContent as {
-    ok: boolean;
-    data?: Record<string, unknown>;
-    error?: { code: string };
-  };
-}
-
-async function loginAndSetup(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("实例密码").fill(webPassword);
-  await page.getByRole("button", { name: "进入 Time OS" }).click();
-  await page.waitForURL(/\/(setup|today)$/);
-  await page.goto("/setup");
-  await page.getByLabel("时区").fill("Asia/Shanghai");
-  await page.getByRole("button", { name: "完成设置" }).click();
-  await page.waitForURL(/\/today$/);
-}
+import { createMcpAccessToken, loginAndSetup, mcpCall } from "./helpers";
 
 test.describe("Basic goal and task management", () => {
   test("create a goal, quick-add tasks, and work their lifecycle", async ({
@@ -120,17 +60,27 @@ test.describe("Basic goal and task management", () => {
   test("MCP mirrors the same domain through structured tools", async ({
     request,
   }) => {
-    await mcpCall(request, 1, "goal_create", {
+    const token = await createMcpAccessToken(request);
+    const call = async (id: number, name: string, args: object) => {
+      const parsed = await mcpCall(request, token, id, name, args);
+      return parsed.result.structuredContent as {
+        ok: boolean;
+        data?: Record<string, unknown>;
+        error?: { code: string };
+      };
+    };
+
+    await call(1, "goal_create", {
       title: "MCP Planning Goal",
       idempotencyKey: "e2e-goal-1",
     });
-    const replay = await mcpCall(request, 2, "goal_create", {
+    const replay = await call(2, "goal_create", {
       title: "MCP Planning Goal",
       idempotencyKey: "e2e-goal-1",
     });
     expect(replay.ok).toBe(true);
 
-    const goals = await mcpCall(request, 3, "goals_list", {});
+    const goals = await call(3, "goals_list", {});
     expect(goals.ok).toBe(true);
     const created = (goals.data as { items: { title: string }[] }).items.find(
       (goal) => goal.title === "MCP Planning Goal",
@@ -140,19 +90,19 @@ test.describe("Basic goal and task management", () => {
     const goalId = (
       goals.data as { items: { id: string; title: string }[] }
     ).items.find((goal) => goal.title === "MCP Planning Goal")!.id;
-    const tasks = await mcpCall(request, 4, "tasks_create", {
+    const tasks = await call(4, "tasks_create", {
       goalId,
       tasks: [{ title: "MCP Task One" }, { title: "MCP Task Two" }],
     });
     expect(tasks.ok).toBe(true);
 
-    const selection = await mcpCall(request, 5, "selection_set", {
+    const selection = await call(5, "selection_set", {
       goalId,
     });
     expect(selection.ok).toBe(true);
 
     // Goal-level state guards still apply through MCP.
-    const invalidTask = await mcpCall(request, 6, "selection_set", {
+    const invalidTask = await call(6, "selection_set", {
       goalId,
       taskId: "00000000-0000-4000-8000-000000000000",
     });

@@ -7,6 +7,7 @@ import {
   settingsUpdateContract,
 } from "@/adapters/settings-contract";
 import { sessionContract } from "@/adapters/session-contract";
+import { MCP_READ_SCOPE, MCP_WRITE_SCOPE } from "@/auth/scopes";
 import type { DashboardService } from "@/services/dashboard";
 import type { DistractionService } from "@/services/distraction";
 import type { PlanningService } from "@/services/planning";
@@ -42,6 +43,29 @@ import {
 import { updateSettingsSchema } from "@/shared/schemas/settings";
 
 const context = { actor: "mcp" } as const;
+const oauthSecuritySchemes = [
+  { type: "oauth2", scopes: [MCP_READ_SCOPE, MCP_WRITE_SCOPE] },
+];
+const oauthToolMeta = { securitySchemes: oauthSecuritySchemes };
+const readOnlyTools = new Set([
+  "system_health",
+  "settings_get",
+  "dashboard_get",
+  "goals_list",
+  "goal_get",
+  "tasks_list",
+  "distractions_list",
+  "sessions_list",
+  "stats_get",
+]);
+
+function toolAnnotations(name: string) {
+  return {
+    readOnlyHint: readOnlyTools.has(name),
+    destructiveHint: false,
+    openWorldHint: false,
+  };
+}
 
 function toolResult(result: object, error?: string) {
   return {
@@ -86,6 +110,8 @@ export function createTimeOsMcpServer(deps: {
       description:
         "Check that the authenticated Time OS endpoint and database schema are ready.",
       inputSchema: z.object({}).strict(),
+      annotations: toolAnnotations("system_health"),
+      _meta: oauthToolMeta,
     },
     async () => {
       try {
@@ -113,6 +139,8 @@ export function createTimeOsMcpServer(deps: {
       description:
         "Read Time OS timezone, week start, and preferred timer mode.",
       inputSchema: z.object({}).strict(),
+      annotations: toolAnnotations("settings_get"),
+      _meta: oauthToolMeta,
     },
     async () => {
       const result = await settingsGetContract(settingsService, context);
@@ -129,6 +157,8 @@ export function createTimeOsMcpServer(deps: {
       title: "Update settings",
       description: "Update Time OS timezone and week start.",
       inputSchema: updateSettingsSchema,
+      annotations: toolAnnotations("settings_update"),
+      _meta: oauthToolMeta,
     },
     async (input) => {
       const result = await settingsUpdateContract(
@@ -154,13 +184,21 @@ export function createTimeOsMcpServer(deps: {
     },
     operation: (input: T) => Promise<unknown>,
   ) => {
-    server.registerTool(name, options, async (input) => {
-      const result = await sessionContract(() => operation(input as T));
-      return toolResult(
-        result,
-        result.ok ? undefined : errorMessage(result.error),
-      );
-    });
+    server.registerTool(
+      name,
+      {
+        ...options,
+        annotations: toolAnnotations(name),
+        _meta: oauthToolMeta,
+      },
+      async (input) => {
+        const result = await sessionContract(() => operation(input as T));
+        return toolResult(
+          result,
+          result.ok ? undefined : errorMessage(result.error),
+        );
+      },
+    );
   };
 
   // ---- Execution context -------------------------------------------------
