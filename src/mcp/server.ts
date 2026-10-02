@@ -28,6 +28,7 @@ import {
   distractionCreateSchema,
   distractionListSchema,
   distractionUpdateSchema,
+  sessionAdvanceSchema,
   sessionCancelSchema,
   sessionFinishSchema,
   sessionListSchema,
@@ -57,6 +58,8 @@ const readOnlyTools = new Set([
   "distractions_list",
   "sessions_list",
   "stats_get",
+  "session_get",
+  "session_get_active",
 ]);
 
 function toolAnnotations(name: string) {
@@ -393,7 +396,7 @@ export function createTimeOsMcpServer(deps: {
     );
   }
 
-  // ---- Sessions (stopwatch execution loop) ---------------------------------
+  // ---- Sessions (shared timer state machine) ---------------------------------
 
   domainTool(
     "session_get_active",
@@ -422,7 +425,7 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "Start session",
       description:
-        "Start a stopwatch Session for a Goal. taskId omitted or null means goal-only execution; attaching a Task requires its exact id (never auto-picked). Fails with ACTIVE_SESSION_EXISTS if an unfinished Session already exists. On success the selection syncs to the started object.",
+        "Start a pomodoro or stopwatch Session for a Goal. taskId omitted or null means goal-only execution; attaching a Task requires its exact id (never auto-picked). Fails with ACTIVE_SESSION_EXISTS if an unfinished Session already exists. On success the selection syncs to the started object.",
       inputSchema: sessionStartSchema,
     },
     (input: z.output<typeof sessionStartSchema>) =>
@@ -449,6 +452,18 @@ export function createTimeOsMcpServer(deps: {
       inputSchema: sessionResumeSchema,
     },
     (input: { id: string }) => sessionService.resumeSession(context, input.id),
+  );
+
+  domainTool(
+    "session_advance",
+    {
+      title: "Advance timer phase",
+      description:
+        "Explicitly start_break after a focus deadline, or start_next_focus after focus is due or during a break. Requires expectedPhaseId. No automatic phase continuation. Repeating the successful action is safe; a different action from an old phase returns STALE_SESSION_PHASE.",
+      inputSchema: sessionAdvanceSchema,
+    },
+    (input: z.output<typeof sessionAdvanceSchema>) =>
+      sessionService.advanceSession(context, input),
   );
 
   domainTool(

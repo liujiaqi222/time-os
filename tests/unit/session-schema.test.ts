@@ -51,13 +51,13 @@ describe("session schemas", () => {
     ).toBe(false);
   });
 
-  it("rejects pomodoro until T08 ships it", () => {
+  it("accepts pomodoro with the same Goal/Task contract", () => {
     expect(
       sessionStartSchema.safeParse({
         goalId,
         timerMode: "pomodoro",
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("session_finish ends only — the legacy outcome field is rejected", () => {

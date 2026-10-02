@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 import { databasePoolOptions } from "@/db/pool-options";
 
 describe("database pool options", () => {
-  it("limits each Vercel function instance to one pooled connection", () => {
+  it("allows Vercel parallel queries while releasing idle connections quickly", () => {
     expect(databasePoolOptions({ VERCEL: "1" })).toMatchObject({
-      max: 1,
+      max: 10,
+      idleTimeoutMillis: 5_000,
       allowExitOnIdle: true,
       connectionTimeoutMillis: 20_000,
     });

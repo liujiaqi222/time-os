@@ -220,12 +220,21 @@ test("setup shows an actionable error when the schema is incomplete", async ({
 
   const recoveryPool = new Pool({ connectionString: databaseUrl });
   try {
-    await recoveryPool.query("drop schema if exists public cascade");
-    await recoveryPool.query("drop schema if exists drizzle cascade");
-    await recoveryPool.query("create schema public");
+    const testSchema = process.env.TIMEOS_TEST_SCHEMA ?? "public";
+    const migrationsSchema = process.env.TIMEOS_TEST_SCHEMA
+      ? `${testSchema}_migrations`
+      : "drizzle";
+    await recoveryPool.query(`drop schema if exists "${testSchema}" cascade`);
+    await recoveryPool.query(
+      `drop schema if exists "${migrationsSchema}" cascade`,
+    );
+    await recoveryPool.query(`create schema "${testSchema}"`);
     const { drizzle } = await import("drizzle-orm/node-postgres");
     const { migrate } = await import("drizzle-orm/node-postgres/migrator");
-    await migrate(drizzle(recoveryPool), { migrationsFolder: "drizzle" });
+    await migrate(drizzle(recoveryPool), {
+      migrationsFolder: process.env.TIMEOS_TEST_MIGRATIONS ?? "drizzle",
+      migrationsSchema,
+    });
   } finally {
     await recoveryPool.end();
   }

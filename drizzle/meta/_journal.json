@@ -15,6 +15,13 @@
       "when": 1790779372201,
       "tag": "0001_lean_speedball",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790861111107,
+      "tag": "0002_clean_brother_voodoo",
+      "breakpoints": true
     }
   ]
 }

@@ -19,7 +19,11 @@ async function ensureNoActiveSession(page: Page) {
   // state is up (fresh runs have no goals yet).
   await expect(
     page.getByRole("button", { name: /开始专注|创建目标/ }).first(),
-  ).toBeVisible({ timeout: 10_000 });
+  ).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "正计时", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "正计时", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
 }
 
 async function createGoalWithTasks(page: Page, title: string, tasks: string[]) {
@@ -81,7 +85,7 @@ test.describe("Goal-direct execution loop", () => {
 
     // 5. Pause / resume.
     await page.getByRole("button", { name: /暂停（Space）/ }).click();
-    await expect(page.getByText("已暂停")).toBeVisible();
+    await expect(page.getByText("正计时已暂停")).toBeVisible();
     await page.getByRole("button", { name: /继续（Space）/ }).click();
     await expect(page.getByText("正计时中")).toBeVisible();
 
@@ -147,7 +151,7 @@ test.describe("Goal-direct execution loop", () => {
 
     // Space pauses without focusing any input first.
     await page.keyboard.press("Space");
-    await expect(page.getByText("已暂停")).toBeVisible();
+    await expect(page.getByText("正计时已暂停")).toBeVisible();
     await expect(
       page.getByRole("button", { name: /继续（Space）/ }),
     ).toBeEnabled();
@@ -230,7 +234,7 @@ test.describe("Goal-direct execution loop", () => {
     expect(pauseBox!.y + pauseBox!.height).toBeLessThan(navBox!.y);
 
     await pause.click();
-    await expect(page.getByText("已暂停")).toBeVisible();
+    await expect(page.getByText("正计时已暂停")).toBeVisible();
     await page.getByRole("button", { name: /继续（Space）/ }).click();
 
     await page.getByRole("button", { name: /结束并保存（F）/ }).click();

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -172,6 +173,38 @@ export const sessions = pgTable(
   ],
 );
 
+/** Persistent phases; due remains unfinished and holds the global slot. */
+export const sessionPhases = pgTable(
+  "session_phases",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "restrict" }),
+    kind: focusPhase("kind").notNull(),
+    sequence: integer("sequence").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    remainingMs: integer("remaining_ms").notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    complete: boolean("complete").default(false).notNull(),
+    advanceAction: text("advance_action"),
+    nextPhaseId: uuid("next_phase_id"),
+  },
+  (table) => [
+    unique("session_phases_sequence_unique").on(
+      table.sessionId,
+      table.sequence,
+    ),
+    check(
+      "session_phases_remaining_nonnegative",
+      sql`${table.remainingMs} >= 0`,
+    ),
+  ],
+);
+export type SessionPhase = typeof sessionPhases.$inferSelect;
+
 /**
  * Real observed focus intervals (PRD §3.4). start opens an interval,
  * pause/finish/cancel close it, resume opens a new one. Stopwatch sessions
@@ -185,6 +218,8 @@ export const focusIntervals = pgTable(
       .notNull()
       .references(() => sessions.id, { onDelete: "restrict" }),
     phase: focusPhase("phase").default("focus").notNull(),
+    phaseId: uuid("phase_id").references(() => sessionPhases.id),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     ...timestamps,
@@ -225,7 +260,8 @@ export const appSettings = pgTable(
     weekStartsOn: integer("week_starts_on").notNull(),
     // Preferred timer mode for the next Session (stopwatch in T06; T08
     // makes pomodoro the default for new instances).
-    timerMode: timerMode("timer_mode").default("stopwatch").notNull(),
+    timerMode: timerMode("timer_mode").default("pomodoro").notNull(),
+    timerPreferences: jsonb("timer_preferences"),
     // The single execution selection {goalId, taskId} (PRD §3.5).
     // taskId = null means explicit goal-only execution; omitting taskId in
     // a set request means auto-resolve — never persisted as a distinct state.

@@ -1,3 +1,5 @@
+import { configOf } from "@/shared/pomodoro";
+import type { TimerConfig } from "@/shared/schemas/session";
 import type { AuthenticatedContext } from "@/auth/context";
 import type { SettingsService } from "@/services/settings";
 import {
@@ -11,6 +13,7 @@ export type SettingsOutput = {
   timezone: string;
   weekStartsOn: number;
   timerMode: "stopwatch" | "pomodoro";
+  timerPreferences: TimerConfig;
   setupCompleted: boolean;
 };
 
@@ -21,6 +24,7 @@ function toOutput(
     timezone: settings.timezone,
     weekStartsOn: settings.weekStartsOn,
     timerMode: settings.timerMode,
+    timerPreferences: configOf(settings.timerPreferences),
     setupCompleted: settings.setupCompletedAt !== null,
   };
 }

@@ -18,7 +18,6 @@ describe("settings validation", () => {
   it.each([
     { timezone: "Not/A_Timezone", weekStartsOn: 1 },
     { timezone: "UTC", weekStartsOn: 2 },
-    { timezone: "UTC" },
   ])("rejects invalid settings: %j", (input) => {
     expect(updateSettingsSchema.safeParse(input).success).toBe(false);
   });

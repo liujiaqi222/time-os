@@ -10,6 +10,7 @@ import {
   planningService,
   selectionService,
   sessionService,
+  settingsService,
 } from "@/services";
 import type { DashboardData } from "@/services/dashboard";
 import type { Distraction } from "@/db/schema";
@@ -18,6 +19,8 @@ import type { EffectiveSelection } from "@/services/selection";
 import type { SessionDetail, SessionView } from "@/services/session";
 import type { Result } from "@/shared/result";
 import type {
+  TimerConfig,
+  SessionAdvanceInput,
   DistractionCreateInput,
   DistractionUpdateInput,
 } from "@/shared/schemas/session";
@@ -82,12 +85,15 @@ export async function startSessionAction(input: {
   goalId: string;
   taskId?: string | null;
   intent?: string | null;
+  timerMode?: "stopwatch" | "pomodoro";
+  idempotencyKey?: string;
 }): Promise<Result<SessionView>> {
   return run(() =>
     sessionService.startSession(context, {
       goalId: input.goalId,
       taskId: input.taskId ?? null,
-      timerMode: "stopwatch",
+      timerMode: input.timerMode ?? "pomodoro",
+      idempotencyKey: input.idempotencyKey,
       intent: input.intent ?? null,
     }),
   );
@@ -219,4 +225,17 @@ export async function listDistractionsAction(
   return sessionContract(() =>
     distractionService.listDistractions(context, { sessionId }),
   );
+}
+
+export async function advanceSessionAction(
+  input: SessionAdvanceInput,
+): Promise<Result<SessionView>> {
+  return run(() => sessionService.advanceSession(context, input));
+}
+
+export async function saveTimerPreferencesAction(input: {
+  timerMode?: "stopwatch" | "pomodoro";
+  timerPreferences?: TimerConfig;
+}) {
+  return run(() => settingsService.update(context, input));
 }

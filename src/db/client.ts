@@ -19,6 +19,10 @@ const pool =
     ...databasePoolOptions(process.env),
   });
 
+// HMR retains this pool across edits. Apply current limits to the retained
+// instance too, otherwise an older one-connection pool keeps queuing reads.
+Object.assign(pool.options, databasePoolOptions(process.env));
+
 // Next.js can evaluate the database module from multiple route bundles inside
 // one process. Reuse one pool in production too, not just during local HMR.
 globalDatabase.timeOsPool = pool;
