@@ -3,6 +3,7 @@ import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import type { AuthenticatedContext } from "@/auth/context";
 import type { Database } from "@/db/client";
 import { goals, sessions, tasks, type Goal, type Task } from "@/db/schema";
+import { appSettings, type AppSettings } from "@/db/schema";
 import type { SelectionReason } from "@/shared/selection";
 import type { SessionService, SessionView } from "@/services/session";
 import type { SelectionService } from "@/services/selection";
@@ -33,6 +34,7 @@ export interface TodayStats {
 }
 
 export interface DashboardData {
+  timerSettings?: Pick<AppSettings, "timerMode" | "timerPreferences">;
   serverNow: string;
   activeSession: SessionView | null;
   selection: DashboardSelection | null;
@@ -170,7 +172,17 @@ export function createDashboardService(
         }
       }
 
+      const [settings] = await database
+        .select()
+        .from(appSettings)
+        .where(eq(appSettings.id, "default"));
       return {
+        timerSettings: settings
+          ? {
+              timerMode: settings.timerMode,
+              timerPreferences: settings.timerPreferences,
+            }
+          : { timerMode: "pomodoro", timerPreferences: null },
         serverNow: now.toISOString(),
         activeSession,
         selection,

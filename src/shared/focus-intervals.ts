@@ -10,6 +10,8 @@
  */
 
 export interface FocusIntervalSlice {
+  phase?: string;
+  deadlineAt?: Date | string | null;
   startedAt: Date | string;
   endedAt: Date | string | null;
 }
@@ -72,8 +74,15 @@ export function focusSecondsInRange(
   if (session.timeBasis === "observed" && session.intervals.length > 0) {
     let totalMs = 0;
     for (const interval of session.intervals) {
+      if (interval.phase && interval.phase !== "focus") continue;
       const startMs = new Date(interval.startedAt).getTime();
-      const endMs = new Date(interval.endedAt ?? now).getTime();
+      const endMs = Math.min(
+        new Date(interval.endedAt ?? now).getTime(),
+        now.getTime(),
+        interval.deadlineAt
+          ? new Date(interval.deadlineAt).getTime()
+          : Infinity,
+      );
       if (endMs <= startMs) continue;
       totalMs += overlapSeconds(startMs, endMs, range);
     }

@@ -72,6 +72,70 @@ const mockDashboard: DashboardData = {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("IdlePanel timer mode", () => {
+  it("switches immediately and can start before preference saving completes", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    const onStart = vi.fn();
+    const onRefresh = vi.fn();
+    render(
+      createElement(IdlePanel, {
+        dashboard: mockDashboard,
+        busy: "none",
+        onStart,
+        onRefresh,
+        onError: vi.fn(),
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "正计时" }));
+    expect(
+      screen
+        .getByRole("button", { name: "正计时" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: /开始/ }));
+    expect(onStart).toHaveBeenCalledWith({
+      intent: null,
+      timerMode: "stopwatch",
+    });
+    expect(onRefresh).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "番茄钟" }));
+    expect(
+      screen
+        .getByRole("button", { name: "番茄钟" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("rolls back the mode and reports a failed background save", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue({ ok: false, json: async () => ({ ok: false }) }),
+    );
+    const onError = vi.fn();
+    render(
+      createElement(IdlePanel, {
+        dashboard: mockDashboard,
+        busy: "none",
+        onStart: vi.fn(),
+        onRefresh: vi.fn(),
+        onError,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "正计时" }));
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith("切换模式未保存，请重试。"),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "番茄钟" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
 });
 
 describe("IdlePanel quick task add", () => {

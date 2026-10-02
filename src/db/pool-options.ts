@@ -15,10 +15,9 @@ export function databasePoolOptions(
   const isVercel = environment.VERCEL === "1";
 
   return {
-    // A Vercel deployment can run several isolated function instances at
-    // once. Keep each instance to one PgBouncer client instead of multiplying
-    // the Neon connection demand by the local-development pool size.
-    max: isVercel ? 1 : 10,
+    // Concurrent requests share each instance's pool. Allow parallel queries
+    // while retaining a bounded pool and releasing idle Vercel connections.
+    max: 10,
     idleTimeoutMillis: isVercel ? 5_000 : 300_000,
     keepAlive: true,
     allowExitOnIdle: isVercel,

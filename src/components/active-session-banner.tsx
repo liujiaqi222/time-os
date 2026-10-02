@@ -7,9 +7,9 @@ import { ArrowRight, Pause } from "lucide-react";
 
 import { getActiveSessionAction } from "@/app/(app)/session-actions";
 import type { SessionView } from "@/services/session";
-import { formatTimeDigits, liveFocusSeconds } from "@/shared/session-timer";
+import { formatTimeDigits } from "@/shared/session-timer";
 import { Button } from "@/components/ui/button";
-import { useCurrentSeconds } from "@/components/use-current-seconds";
+import { useTimerDisplay } from "@/components/today/use-timer-display";
 
 /**
  * Compact unfinished-timer notice for non-execution pages (PRD §5.1): a
@@ -37,20 +37,13 @@ export function ActiveSessionBanner({
     };
   }, [pathname]);
 
-  const currentSeconds = useCurrentSeconds();
-  const now = currentSeconds === null ? null : new Date(currentSeconds * 1000);
-
   if (pathname === "/today" || !session) return null;
+  return <SessionBanner session={session} />;
+}
 
+function SessionBanner({ session }: { session: SessionView }) {
+  const display = useTimerDisplay(session);
   const isPaused = session.status === "paused";
-  const elapsed = isPaused
-    ? session.focusSeconds
-    : liveFocusSeconds(
-        session.focusSeconds,
-        session.serverNow,
-        now ?? new Date(session.serverNow),
-      );
-
   return (
     <div
       role="region"
@@ -77,7 +70,13 @@ export function ActiveSessionBanner({
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                   <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
                 </span>
-                专注中
+                {display.due
+                  ? "到时等待"
+                  : session.phase?.kind === "short_break"
+                    ? "短休息中"
+                    : session.phase?.kind === "long_break"
+                      ? "长休息中"
+                      : "专注中"}
               </>
             )}
           </span>
@@ -97,7 +96,7 @@ export function ActiveSessionBanner({
 
         <div className="flex items-center gap-3">
           <span className="font-mono text-sm font-semibold text-stone-800 tabular-nums">
-            {formatTimeDigits(elapsed)}
+            {formatTimeDigits(display.seconds)}
           </span>
           <Button
             size="sm"

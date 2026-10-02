@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Clock3, Flame } from "lucide-react";
 
 import {
-  cancelSessionAction,
   completeTaskAction,
   finishSessionAction,
   getDashboardAction,
@@ -20,6 +19,7 @@ import { RunPanel, type RunBusyAction } from "@/components/today/run-panel";
 import type { Task } from "@/db/schema";
 import type { DashboardData } from "@/services/dashboard";
 import type { SessionView } from "@/services/session";
+import type { Result } from "@/shared/result";
 import { formatHumanDuration } from "@/shared/session-timer";
 
 /**
@@ -38,6 +38,10 @@ export function TodayView({
   firstRun?: boolean;
 }) {
   const [dashboard, setDashboard] = useState(initialDashboard);
+  const [executionHint, setExecutionHint] = useState<{
+    sessionId: string;
+    hint: string | null;
+  } | null>(null);
   const [busy, setBusy] = useState<RunBusyAction>("none");
   const [actionError, setActionError] = useState<string | null>(null);
   const [remoteNotice, setRemoteNotice] = useState<{
@@ -59,11 +63,23 @@ export function TodayView({
     initialDashboard.activeSession?.focusSeconds ?? 0,
   );
   // Set when THIS page ends/cancels so the cross-end detector stays quiet.
+  const startKeyRef = useRef<string | null>(null);
   const selfEndRef = useRef(false);
 
+  const mutationEpoch = useRef(0);
+  const busyRef = useRef(busy);
+  useEffect(() => {
+    busyRef.current = busy;
+    if (busy !== "none") mutationEpoch.current += 1;
+  }, [busy]);
   const refresh = useCallback(async () => {
+    const epoch = mutationEpoch.current;
     const result = await getDashboardAction();
-    if (result.ok) {
+    if (
+      result.ok &&
+      epoch === mutationEpoch.current &&
+      busyRef.current === "none"
+    ) {
       dashboardSessionSecondsRef.current =
         result.data.activeSession?.focusSeconds ?? 0;
       setDashboard(result.data);
@@ -103,13 +119,54 @@ export function TodayView({
   // Browser refresh already re-renders from the server; refocus and
   // reconnect re-read it too (PRD §5).
   useEffect(() => {
+    let polling = false;
+    let cancelled = false;
+    const pollSession = async () => {
+      if (polling || busyRef.current !== "none") return;
+      polling = true;
+      const epoch = mutationEpoch.current;
+      try {
+        const response = await fetch("/api/session/active", {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const result: Result<SessionView | null> = await response.json();
+        if (
+          cancelled ||
+          !result.ok ||
+          epoch !== mutationEpoch.current ||
+          busyRef.current !== "none"
+        )
+          return;
+        setDashboard((prev) => {
+          const next = result.data;
+          if (
+            next &&
+            prev.activeSession?.id === next.id &&
+            prev.activeSession.revision > next.revision
+          )
+            return prev;
+          return { ...prev, activeSession: next };
+        });
+      } catch {
+        // A failed read leaves the last authoritative timer anchor intact.
+      } finally {
+        polling = false;
+      }
+    };
     const resync = () => void refresh();
     const onVisibility = () => {
       if (document.visibilityState === "visible") resync();
     };
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible" && busyRef.current === "none")
+        void pollSession();
+    }, 5000);
     window.addEventListener("online", resync);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      cancelled = true;
+      clearInterval(poll);
       window.removeEventListener("online", resync);
       document.removeEventListener("visibilitychange", onVisibility);
     };
@@ -117,7 +174,10 @@ export function TodayView({
 
   // ---- Run actions ---------------------------------------------------------
 
-  const handleStart = async (input: { intent: string | null }) => {
+  const handleStart = async (input: {
+    intent: string | null;
+    timerMode: "stopwatch" | "pomodoro";
+  }) => {
     const selection = dashboard.selection;
     if (!selection || busy !== "none") return;
     setBusy("start");
@@ -127,9 +187,22 @@ export function TodayView({
       goalId: selection.goal.id,
       taskId: selection.task?.id ?? null,
       intent: input.intent,
-    });
+      timerMode: input.timerMode,
+      idempotencyKey: (startKeyRef.current ??= crypto.randomUUID()),
+    }).catch(() => ({
+      ok: false as const,
+      error: {
+        code: "DATABASE_UNAVAILABLE" as const,
+        message: "连接失败，请重试。",
+      },
+    }));
     if (result.ok) {
+      startKeyRef.current = null;
       dashboardSessionSecondsRef.current = 0;
+      setExecutionHint({
+        sessionId: result.data.id,
+        hint: dashboard.resumeHint,
+      });
       setDashboard((prev) => ({
         ...prev,
         serverNow: result.data.serverNow,
@@ -162,7 +235,13 @@ export function TodayView({
       ...(payload.changed
         ? { note: payload.note, noteExpectedVersion: payload.expectedVersion }
         : {}),
-    });
+    }).catch(() => ({
+      ok: false as const,
+      error: {
+        code: "DATABASE_UNAVAILABLE" as const,
+        message: "保存失败，请重试。",
+      },
+    }));
     if (result.ok) {
       selfEndRef.current = true;
       runningIdRef.current = null;
@@ -199,7 +278,23 @@ export function TodayView({
     if (!session) return;
     setBusy("cancel");
     setActionError(null);
-    const result = await cancelSessionAction(session.id);
+    const result = await fetch("/api/session/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: session.id, operation: "cancel" }),
+    })
+      .then(async (response) => {
+        const result: Result<SessionView> = await response.json();
+        if (!response.ok && result.ok) throw new Error("Cancel request failed");
+        return result;
+      })
+      .catch(() => ({
+        ok: false as const,
+        error: {
+          code: "DATABASE_UNAVAILABLE" as const,
+          message: "取消失败，请重试。",
+        },
+      }));
     if (result.ok) {
       selfEndRef.current = true;
       runningIdRef.current = null;
@@ -230,7 +325,14 @@ export function TodayView({
   };
 
   const handleSessionUpdated = (view: SessionView) => {
-    setDashboard((prev) => ({ ...prev, activeSession: view }));
+    mutationEpoch.current += 1;
+    setDashboard((prev) =>
+      prev.activeSession &&
+      prev.activeSession.id === view.id &&
+      prev.activeSession.revision > view.revision
+        ? prev
+        : { ...prev, activeSession: view },
+    );
   };
 
   const handleSessionLost = async () => {
@@ -353,8 +455,8 @@ export function TodayView({
     <div className="mx-auto w-full max-w-4xl space-y-5 pb-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-semibold tracking-[0.2em] text-[#b54b35] uppercase">
-            Today
+          <p className="text-xs font-semibold tracking-normal text-[#b54b35]">
+            今天
           </p>
           <h1 className="mt-1 text-2xl font-semibold tracking-[-0.035em] text-stone-950 sm:text-3xl">
             {initialHeadline}
@@ -410,7 +512,7 @@ export function TodayView({
         </div>
       )}
 
-      <main className="rounded-3xl border border-stone-200 bg-white p-5 shadow-[0_12px_35px_rgba(28,25,23,0.06)] sm:p-8">
+      <main className="rounded-3xl bg-white p-5 sm:p-8">
         <div>
           {endCard ? (
             <EndCard
@@ -431,11 +533,18 @@ export function TodayView({
             <RunPanel
               key={activeSession.id}
               session={activeSession}
+              resumeHint={
+                executionHint?.sessionId === activeSession.id
+                  ? executionHint.hint
+                  : dashboard.resumeHint
+              }
               busy={busy}
               cancelOpen={cancelOpen}
               onBusyChange={setBusy}
               onSessionUpdated={handleSessionUpdated}
               onSessionLost={handleSessionLost}
+              timerPreferences={dashboard.timerSettings?.timerPreferences}
+              onPreferencesSaved={() => void refresh()}
               onFinishRequested={(payload) => void handleFinish(payload)}
               onOpenCancel={() => setCancelOpen(true)}
             />

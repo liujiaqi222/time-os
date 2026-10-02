@@ -535,11 +535,18 @@ export function createHistoryService(database: Database): HistoryService {
 export async function intervalsOfSessions(
   database: Database,
   sessionIds: string[],
-): Promise<Map<string, { startedAt: Date; endedAt: Date | null }[]>> {
-  const map = new Map<string, { startedAt: Date; endedAt: Date | null }[]>();
+): Promise<
+  Map<string, import("@/shared/focus-intervals").FocusIntervalSlice[]>
+> {
+  const map = new Map<
+    string,
+    import("@/shared/focus-intervals").FocusIntervalSlice[]
+  >();
   if (sessionIds.length === 0) return map;
   const rows = await database
     .select({
+      phase: focusIntervals.phase,
+      deadlineAt: focusIntervals.deadlineAt,
       sessionId: focusIntervals.sessionId,
       startedAt: focusIntervals.startedAt,
       endedAt: focusIntervals.endedAt,
@@ -549,7 +556,12 @@ export async function intervalsOfSessions(
     .orderBy(asc(focusIntervals.startedAt));
   for (const row of rows) {
     const list = map.get(row.sessionId) ?? [];
-    list.push({ startedAt: row.startedAt, endedAt: row.endedAt });
+    list.push({
+      phase: row.phase,
+      deadlineAt: row.deadlineAt,
+      startedAt: row.startedAt,
+      endedAt: row.endedAt,
+    });
     map.set(row.sessionId, list);
   }
   return map;

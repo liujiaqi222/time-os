@@ -29,7 +29,7 @@ export function createSettingsService(database: Database): SettingsService {
         id: SETTINGS_ID,
         timezone: "UTC",
         weekStartsOn: 1,
-        timerMode: "stopwatch",
+        timerMode: "pomodoro",
       })
       .onConflictDoNothing({ target: appSettings.id });
   }

@@ -7,11 +7,26 @@ export const sessionStatusSchema = z.enum([
   "cancelled",
 ]);
 
-/**
- * T06 ships the stopwatch (PRD §6.2). The pomodoro mode arrives with T08;
- * sending it earlier is a structured rejection, never a hidden default.
- */
-export const timerModeSchema = z.enum(["stopwatch"]);
+export const timerModeSchema = z.enum(["stopwatch", "pomodoro"]);
+export const timerConfigSchema = z
+  .object({
+    focusMinutes: z.number().int().min(1).max(180).default(25),
+    shortBreakMinutes: z.number().int().min(1).max(180).default(5),
+    longBreakMinutes: z.number().int().min(1).max(180).default(15),
+    iterations: z.number().int().min(1).max(12).default(4),
+    longBreakEnabled: z.boolean().default(true),
+    soundEnabled: z.boolean().default(true),
+  })
+  .strict();
+export type TimerConfig = z.output<typeof timerConfigSchema>;
+export const sessionAdvanceSchema = z
+  .object({
+    id: z.string().uuid(),
+    expectedPhaseId: z.string().uuid(),
+    action: z.enum(["start_break", "start_next_focus"]),
+  })
+  .strict();
+export type SessionAdvanceInput = z.input<typeof sessionAdvanceSchema>;
 
 const instantSchema = z.string().datetime({ offset: true });
 const nullableUuidSchema = z.string().uuid().nullable().optional();

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { timerConfigSchema, timerModeSchema } from "./session";
 
 function isIanaTimezone(value: string): boolean {
   try {
@@ -15,15 +16,23 @@ export const timezoneSchema = z
   .refine(isIanaTimezone, "Use a valid IANA timezone such as Asia/Shanghai.");
 
 export const updateSettingsSchema = z.object({
+  timezone: timezoneSchema.optional(),
+  weekStartsOn: z.coerce
+    .number()
+    .int()
+    .pipe(z.union([z.literal(0), z.literal(1)]))
+    .optional(),
+  timerMode: timerModeSchema.optional(),
+  timerPreferences: timerConfigSchema.optional(),
+});
+
+export const setupSettingsSchema = updateSettingsSchema.extend({
   timezone: timezoneSchema,
   weekStartsOn: z.coerce
     .number()
     .int()
     .pipe(z.union([z.literal(0), z.literal(1)])),
-});
-
-export const setupSettingsSchema = updateSettingsSchema.extend({
   setupCompleted: z.literal(true).default(true),
 });
 
-export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
+export type UpdateSettingsInput = z.input<typeof updateSettingsSchema>;

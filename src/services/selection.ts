@@ -107,7 +107,7 @@ export async function applySelection(
       // conflict update when the row already exists.
       timezone: "UTC",
       weekStartsOn: 1,
-      timerMode: "stopwatch",
+      timerMode: "pomodoro",
       selectedGoalId: selection?.goalId ?? null,
       selectedTaskId: selection?.taskId ?? null,
     })

@@ -16,8 +16,13 @@ export function focusSecondsOfIntervals(
 ): number {
   let totalMs = 0;
   for (const interval of intervals) {
+    if (interval.phase && interval.phase !== "focus") continue;
     const start = new Date(interval.startedAt).getTime();
-    const end = new Date(interval.endedAt ?? now).getTime();
+    const end = Math.min(
+      new Date(interval.endedAt ?? now).getTime(),
+      now.getTime(),
+      interval.deadlineAt ? new Date(interval.deadlineAt).getTime() : Infinity,
+    );
     if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
       totalMs += end - start;
     }

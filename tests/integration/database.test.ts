@@ -22,17 +22,34 @@ const databaseUrl =
   process.env.TEST_DATABASE_URL ??
   "postgresql://postgres:postgres@localhost:55432/time_os_test";
 const parsedUrl = new URL(databaseUrl);
+const testSchema = process.env.TIMEOS_TEST_SCHEMA ?? "public";
+const isolated = /^timeos_test_[a-f0-9]{32}$/.test(testSchema);
+const migrationOptions = {
+  migrationsFolder: process.env.TIMEOS_TEST_MIGRATIONS ?? "drizzle",
+  migrationsSchema: isolated ? `${testSchema}_migrations` : "drizzle",
+};
 
 if (
-  !["localhost", "127.0.0.1"].includes(parsedUrl.hostname) ||
-  !parsedUrl.pathname.endsWith("_test")
+  !isolated &&
+  (!["localhost", "127.0.0.1"].includes(parsedUrl.hostname) ||
+    !parsedUrl.pathname.endsWith("_test"))
 ) {
   throw new Error(
     "Integration tests refuse to clean a database unless it is local and ends with _test.",
   );
 }
 
-const pool = new Pool({ connectionString: databaseUrl, max: 5 });
+const pool = new Pool({
+  connectionString: databaseUrl,
+  max: 5,
+  connectionTimeoutMillis: 15_000,
+  query_timeout: 30_000,
+  statement_timeout: 30_000,
+  idle_in_transaction_session_timeout: 30_000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5000,
+  maxLifetimeSeconds: 60,
+});
 const database = drizzle(pool, { schema });
 const transitionQueries: string[] = [];
 const transitionDatabase = drizzle(pool, {
@@ -66,10 +83,12 @@ const dashboardService = createDashboardService(database, {
 });
 
 beforeAll(async () => {
-  await pool.query("drop schema if exists public cascade");
-  await pool.query("drop schema if exists drizzle cascade");
-  await pool.query("create schema public");
-  await migrate(database, { migrationsFolder: "drizzle" });
+  await pool.query(`drop schema if exists "${testSchema}" cascade`);
+  await pool.query(
+    `drop schema if exists "${migrationOptions.migrationsSchema}" cascade`,
+  );
+  await pool.query(`create schema "${testSchema}"`);
+  await migrate(database, migrationOptions);
 });
 
 afterAll(async () => {
@@ -87,11 +106,11 @@ beforeEach(async () => {
 
 describe("committed migrations (empty-database initialization)", () => {
   it("create the complete v3 schema from an empty database and can run repeatedly", async () => {
-    await migrate(database, { migrationsFolder: "drizzle" });
+    await migrate(database, migrationOptions);
     const result = await pool.query<{ table_name: string }>(
       `select table_name
        from information_schema.tables
-       where table_schema = 'public'
+       where table_schema = '${testSchema}'
        order by table_name`,
     );
 
@@ -111,6 +130,7 @@ describe("committed migrations (empty-database initialization)", () => {
       "oauth_refresh_token",
       "oauth_resource",
       "session",
+      "session_phases",
       "sessions",
       "tasks",
       "user",
@@ -359,7 +379,14 @@ describe("session service: stopwatch loop, exclusivity, idempotency", () => {
     expect(paused.status).toBe("paused");
     expect(paused.intervals).toHaveLength(1);
     expect(paused.intervals[0]!.endedAt).not.toBeNull();
-    expect(paused.focusSeconds).toBe(session.focusSeconds);
+    expect(paused.focusSeconds).toBeGreaterThanOrEqual(session.focusSeconds);
+    expect(paused.focusSeconds).toBe(
+      Math.floor(
+        (paused.intervals[0]!.endedAt!.getTime() -
+          paused.intervals[0]!.startedAt.getTime()) /
+          1000,
+      ),
+    );
 
     // Idempotent pause.
     expect((await sessionService.pauseSession(web, session.id)).id).toBe(
@@ -405,26 +432,137 @@ describe("session service: stopwatch loop, exclusivity, idempotency", () => {
     });
   });
 
-  it("keeps pause and resume to one database roundtrip each", async () => {
-    const { goal } = await createGoalWithTasks("fast transitions", []);
-    const session = await sessionService.startSession(web, {
+  it("keeps a retry-safe pomodoro start to one database roundtrip", async () => {
+    const { goal } = await createGoalWithTasks("fast pomodoro start", []);
+    const input = {
       goalId: goal.id,
-      taskId: null,
-      timerMode: "stopwatch",
-    });
-
+      timerMode: "pomodoro" as const,
+      idempotencyKey: randomUUID(),
+    };
     transitionQueries.length = 0;
-    const paused = await transitionSessionService.pauseSession(web, session.id);
-    expect(paused.status).toBe("paused");
-    expect(transitionQueries).toHaveLength(1);
-
-    transitionQueries.length = 0;
-    const resumed = await transitionSessionService.resumeSession(
-      web,
-      session.id,
+    const before = performance.now();
+    const started = await transitionSessionService.startSession(web, input);
+    console.info(
+      `Pomodoro start: ${Math.round(performance.now() - before)}ms, ${transitionQueries.length} database statements`,
     );
-    expect(resumed.status).toBe("active");
+    expect(started.phase).toMatchObject({
+      kind: "focus",
+      state: "running",
+      remainingSeconds: 1500,
+    });
+    expect(started.phases).toHaveLength(1);
     expect(transitionQueries).toHaveLength(1);
+    const replay = await transitionSessionService.startSession(web, input);
+    expect(replay.id).toBe(started.id);
+    expect(replay.phases).toHaveLength(1);
+    await expect(
+      transitionSessionService.startSession(web, {
+        ...input,
+        intent: "different",
+      }),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+  });
+
+  it.each(["stopwatch", "pomodoro"] as const)(
+    "keeps %s pause and resume to one database roundtrip each",
+    async (timerMode) => {
+      const { goal } = await createGoalWithTasks("fast transitions", []);
+      const session = await sessionService.startSession(web, {
+        goalId: goal.id,
+        taskId: null,
+        timerMode,
+      });
+
+      transitionQueries.length = 0;
+      const pauseStarted = performance.now();
+      const paused = await transitionSessionService.pauseSession(
+        web,
+        session.id,
+      );
+      console.info(
+        `${timerMode} pause: ${Math.round(performance.now() - pauseStarted)}ms, ${transitionQueries.length} statements`,
+      );
+      expect(paused.status).toBe("paused");
+      expect(transitionQueries).toHaveLength(1);
+
+      transitionQueries.length = 0;
+      const resumeStarted = performance.now();
+      const resumed = await transitionSessionService.resumeSession(
+        web,
+        session.id,
+      );
+      console.info(
+        `${timerMode} resume: ${Math.round(performance.now() - resumeStarted)}ms, ${transitionQueries.length} statements`,
+      );
+      expect(resumed.status).toBe("active");
+      expect(transitionQueries).toHaveLength(1);
+    },
+  );
+
+  it.each(["stopwatch", "pomodoro"] as const)(
+    "keeps %s cancellation to one database roundtrip",
+    async (timerMode) => {
+      const { goal } = await createGoalWithTasks("fast cancel", []);
+      const session = await sessionService.startSession(web, {
+        goalId: goal.id,
+        timerMode,
+      });
+      transitionQueries.length = 0;
+      const started = performance.now();
+      const cancelled = await transitionSessionService.cancelSession(
+        web,
+        session.id,
+      );
+      console.info(
+        `${timerMode} cancel: ${Math.round(performance.now() - started)}ms, ${transitionQueries.length} statements`,
+      );
+      expect(cancelled.status).toBe("cancelled");
+      expect(cancelled.intervals.every((interval) => interval.endedAt)).toBe(
+        true,
+      );
+      expect(cancelled.phases?.every((phase) => phase.endedAt) ?? true).toBe(
+        true,
+      );
+      expect(transitionQueries).toHaveLength(1);
+      const retry = await transitionSessionService.cancelSession(
+        web,
+        session.id,
+      );
+      expect(retry.revision).toBe(cancelled.revision);
+      expect(retry.endedAt).toEqual(cancelled.endedAt);
+    },
+  );
+
+  it("arbitrates concurrent fast starts and replays the winning key", async () => {
+    const { goal } = await createGoalWithTasks("concurrent fast start", []);
+    const input = { goalId: goal.id, timerMode: "pomodoro" as const };
+    const keys = [randomUUID(), randomUUID()];
+    const outcomes = await Promise.allSettled(
+      keys.map((idempotencyKey) =>
+        sessionService.startSession(web, { ...input, idempotencyKey }),
+      ),
+    );
+    const winner = outcomes.findIndex(
+      (result) => result.status === "fulfilled",
+    );
+    expect(
+      outcomes.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(outcomes[1 - winner]).toMatchObject({
+      status: "rejected",
+      reason: { code: "ACTIVE_SESSION_EXISTS" },
+    });
+    const started = (
+      outcomes[winner] as PromiseFulfilledResult<
+        Awaited<ReturnType<typeof sessionService.startSession>>
+      >
+    ).value;
+    const replay = await sessionService.startSession(web, {
+      ...input,
+      idempotencyKey: keys[winner],
+    });
+    expect(replay.id).toBe(started.id);
+    expect(replay.phases).toHaveLength(1);
   });
 
   it("rejects a second start while one is unfinished, from either surface", async () => {
@@ -1189,5 +1327,363 @@ describe("MCP server over the real protocol", () => {
     expect(
       (conflict as unknown as { error: { code: string } }).error.code,
     ).toBe("VERSION_CONFLICT");
+  });
+});
+
+describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
+  const web = { actor: "web" } as const;
+  const mcp = { actor: "mcp" } as const;
+  let now = new Date("2026-10-01T00:00:00Z");
+  const timer = createSessionService(database, {
+    distractionService,
+    clock: () => now,
+  });
+  const step = (seconds: number) => {
+    now = new Date(now.getTime() + seconds * 1000);
+  };
+  async function start() {
+    now = new Date("2026-10-01T00:00:00Z");
+    await settingsService.update(web, {
+      timerPreferences: {
+        focusMinutes: 25,
+        shortBreakMinutes: 5,
+        longBreakMinutes: 15,
+        longBreakEnabled: true,
+        soundEnabled: false,
+      },
+    });
+    const goal = await planningService.createGoal(web, { title: "Pomodoro" });
+    return timer.startSession(web, { goalId: goal.id, timerMode: "pomodoro" });
+  }
+  it("cancels an overdue phase at its deadline without counting waiting time", async () => {
+    const session = await start();
+    step(7200);
+    const cancelled = await timer.cancelSession(web, session.id);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.focusSeconds).toBe(1500);
+    expect(cancelled.completedFocusCount).toBe(1);
+    expect(cancelled.intervals[0].endedAt?.toISOString()).toBe(
+      "2026-10-01T00:25:00.000Z",
+    );
+    const phase = await pool.query(
+      "select ended_at, remaining_ms, complete from session_phases where session_id = $1",
+      [session.id],
+    );
+    expect(phase.rows[0]).toMatchObject({
+      ended_at: new Date("2026-10-01T00:25:00Z"),
+      remaining_ms: 0,
+      complete: true,
+    });
+  });
+  it("cancels a paused phase without counting the paused time", async () => {
+    const session = await start();
+    step(60);
+    await timer.pauseSession(web, session.id);
+    step(7200);
+    const cancelled = await timer.cancelSession(mcp, session.id);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.focusSeconds).toBe(60);
+    expect(cancelled.completedFocusCount).toBe(0);
+    const phase = await pool.query(
+      "select remaining_ms, complete from session_phases where session_id = $1",
+      [session.id],
+    );
+    expect(phase.rows[0]).toMatchObject({
+      remaining_ms: 1440000,
+      complete: false,
+    });
+    expect(await timer.getActiveSession(web)).toBeNull();
+  });
+  it("reads after two hours without writing and settles at the original deadline on finish", async () => {
+    const session = await start();
+    step(25 * 60 + 2 * 3600);
+    const read = await timer.getSession(mcp, session.id);
+    expect(read.focusSeconds).toBe(1500);
+    expect(read.phase?.state).toBe("due");
+    expect(read.completedFocusCount).toBe(1);
+    const persisted = await pool.query(
+      "select ended_at from focus_intervals where session_id = $1",
+      [session.id],
+    );
+    expect(persisted.rows[0].ended_at).toBeNull();
+    const finished = await timer.finishSession(web, session.id);
+    expect(finished.durationSeconds).toBe(1500);
+    expect(finished.intervals[0].endedAt?.toISOString()).toBe(
+      "2026-10-01T00:25:00.000Z",
+    );
+    expect((await timer.finishSession(mcp, session.id)).revision).toBe(
+      finished.revision,
+    );
+  });
+  it("10 minutes focus, 7 paused, 15 resumed yields 25 minutes and a shifted deadline", async () => {
+    const session = await start();
+    step(600);
+    const pauses = await Promise.all([
+      timer.pauseSession(web, session.id),
+      timer.pauseSession(mcp, session.id),
+    ]);
+    expect(pauses[0].phase?.remainingSeconds).toBe(900);
+    for (const paused of pauses) {
+      expect(paused.phase?.state).toBe("paused");
+      expect(paused.intervals).toHaveLength(1);
+      expect(paused.intervals[0].endedAt?.toISOString()).toBe(
+        now.toISOString(),
+      );
+    }
+    step(420);
+    const resumes = await Promise.all([
+      timer.resumeSession(mcp, session.id),
+      timer.resumeSession(web, session.id),
+    ]);
+    expect(resumes[0].phase?.deadlineAt?.toISOString()).toBe(
+      "2026-10-01T00:32:00.000Z",
+    );
+    for (const resumed of resumes) {
+      expect(resumed.phase?.state).toBe("running");
+      expect(resumed.intervals).toHaveLength(2);
+      expect(resumed.intervals[1].endedAt).toBeNull();
+    }
+    step(900);
+    const read = await timer.getSession(web, session.id);
+    expect(read.focusSeconds).toBe(1500);
+    expect(read.intervals).toHaveLength(2);
+    expect(read.phase?.state).toBe("due");
+  });
+  it("excludes both waits and break, and preserves configuration across another device edit", async () => {
+    const session = await start();
+    step(1680);
+    const rest = await timer.advanceSession(mcp, {
+      id: session.id,
+      expectedPhaseId: session.phase!.id,
+      action: "start_break",
+    });
+    expect(rest.focusSeconds).toBe(1500);
+    await settingsService.update(web, {
+      timerPreferences: {
+        focusMinutes: 50,
+        shortBreakMinutes: 10,
+        longBreakMinutes: 30,
+        longBreakEnabled: false,
+        soundEnabled: false,
+      },
+    });
+    step(420);
+    const next = await timer.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: rest.phase!.id,
+      action: "start_next_focus",
+    });
+    expect(next.phase?.remainingSeconds).toBe(1500);
+    expect(next.focusSeconds).toBe(1500);
+    step(30);
+    expect((await timer.finishSession(web, session.id)).durationSeconds).toBe(
+      1530,
+    );
+    const subsequent = await timer.startSession(mcp, {
+      goalId: session.goalId,
+      timerMode: "pomodoro",
+    });
+    expect(subsequent.phase?.remainingSeconds).toBe(3000);
+  });
+  it("offers fourth-round long break once; skipping it makes the fifth break short", async () => {
+    let session = await start();
+    for (let round = 1; round <= 5; round++) {
+      step(1500);
+      const read = await timer.getSession(mcp, session.id);
+      expect(read.completedFocusCount).toBe(round);
+      expect(read.nextBreakKind).toBe(
+        round === 4 ? "long_break" : "short_break",
+      );
+      expect(
+        (await timer.getSession(web, session.id)).completedFocusCount,
+      ).toBe(round);
+      if (round < 5) {
+        const input = {
+          id: session.id,
+          expectedPhaseId: read.phase!.id,
+          action: "start_next_focus" as const,
+        };
+        session = await timer.advanceSession(web, input);
+        const retry = await timer.advanceSession(mcp, input);
+        expect(retry.phase!.id).toBe(session.phase!.id);
+      }
+    }
+    expect((await timer.finishSession(web, session.id)).durationSeconds).toBe(
+      7500,
+    );
+  });
+  it("competing advance actions form one phase, and old phase cannot touch the new one", async () => {
+    const session = await start();
+    step(1500);
+    const outcomes = await Promise.allSettled([
+      timer.advanceSession(web, {
+        id: session.id,
+        expectedPhaseId: session.phase!.id,
+        action: "start_break",
+      }),
+      timer.advanceSession(mcp, {
+        id: session.id,
+        expectedPhaseId: session.phase!.id,
+        action: "start_next_focus",
+      }),
+    ]);
+    expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.find((r) => r.status === "rejected")).toMatchObject({
+      reason: { code: "STALE_SESSION_PHASE" },
+    });
+    expect((await timer.getSession(web, session.id)).phases).toHaveLength(2);
+  });
+  it("pause exactly at deadline cannot create negative remaining or an extra interval", async () => {
+    const session = await start();
+    step(1500);
+    await expect(timer.pauseSession(web, session.id)).rejects.toMatchObject({
+      code: "INVALID_SESSION_STATE",
+    });
+    const read = await timer.getSession(mcp, session.id);
+    expect(read.phase?.remainingSeconds).toBe(0);
+    expect(read.focusSeconds).toBe(1500);
+    expect(read.actions).not.toContain("resume");
+    expect(read.intervals).toHaveLength(1);
+  });
+  it("break pause/resume and early next focus preserve prior focus and actual intervals", async () => {
+    const session = await start();
+    step(1500);
+    const rest = await timer.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: session.phase!.id,
+      action: "start_break",
+    });
+    step(100);
+    const paused = await timer.pauseSession(mcp, session.id);
+    expect(paused.phase).toMatchObject({
+      kind: "short_break",
+      remainingSeconds: 200,
+      state: "paused",
+    });
+    step(700);
+    await timer.resumeSession(web, session.id);
+    step(20);
+    const next = await timer.advanceSession(mcp, {
+      id: session.id,
+      expectedPhaseId: rest.phase!.id,
+      action: "start_next_focus",
+    });
+    expect(next.focusSeconds).toBe(1500);
+    expect(next.completedFocusCount).toBe(1);
+    step(30);
+    expect((await timer.finishSession(web, session.id)).durationSeconds).toBe(
+      1530,
+    );
+  });
+  it("finish in break saves prior focus; cancellation excludes the entire process", async () => {
+    const session = await start();
+    step(1500);
+    await timer.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: session.phase!.id,
+      action: "start_break",
+    });
+    step(180);
+    expect((await timer.finishSession(mcp, session.id)).durationSeconds).toBe(
+      1500,
+    );
+    await timer.cancelSession(web, session.id);
+    const stats = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-02T00:00:00Z",
+      now: now.toISOString(),
+    });
+    expect(stats.totalFocusSeconds).toBe(0);
+  });
+  it("due and break still block goal completion and a second session", async () => {
+    const session = await start();
+    step(1500);
+    await expect(
+      timer.startSession(mcp, {
+        goalId: session.goalId,
+        timerMode: "stopwatch",
+      }),
+    ).rejects.toMatchObject({ code: "ACTIVE_SESSION_EXISTS" });
+    await expect(
+      planningService.updateGoal(web, {
+        id: session.goalId,
+        status: "completed",
+      }),
+    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
+    await timer.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: session.phase!.id,
+      action: "start_break",
+    });
+    await expect(
+      planningService.updateGoal(web, {
+        id: session.goalId,
+        status: "archived",
+      }),
+    ).rejects.toMatchObject({ code: "PARENT_HAS_ACTIVE_SESSION" });
+  });
+  it("finish racing start_break and cancel racing next_focus never leave open intervals", async () => {
+    const session = await start();
+    step(1500);
+    await Promise.allSettled([
+      timer.finishSession(web, session.id),
+      timer.advanceSession(mcp, {
+        id: session.id,
+        expectedPhaseId: session.phase!.id,
+        action: "start_break",
+      }),
+    ]);
+    const view = await timer.getSession(web, session.id);
+    expect(view.status).toBe("completed");
+    expect(view.durationSeconds).toBe(1500);
+    expect(view.intervals.every((i) => i.endedAt)).toBe(true);
+    const second = await timer.startSession(web, {
+      goalId: session.goalId,
+      timerMode: "pomodoro",
+    });
+    step(1500);
+    await Promise.allSettled([
+      timer.advanceSession(mcp, {
+        id: second.id,
+        expectedPhaseId: second.phase!.id,
+        action: "start_next_focus",
+      }),
+      timer.cancelSession(web, second.id),
+    ]);
+    const cancelled = await timer.getSession(web, second.id);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.intervals.every((i) => i.endedAt)).toBe(true);
+  });
+  it("cross-midnight real intervals allocate focus across days without paused time", async () => {
+    await settingsService.update(web, { timezone: "UTC", weekStartsOn: 1 });
+    const session = await start();
+    // Test clock starts five minutes before midnight using a fresh session.
+    await timer.cancelSession(web, session.id);
+    now = new Date("2026-10-01T23:55:00Z");
+    const late = await timer.startSession(web, {
+      goalId: session.goalId,
+      timerMode: "pomodoro",
+    });
+    step(600);
+    await timer.pauseSession(web, late.id);
+    step(420);
+    await timer.resumeSession(web, late.id);
+    step(900);
+    await timer.finishSession(web, late.id);
+    const first = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-10-01",
+      to: "2026-10-02",
+      now: now.toISOString(),
+    });
+    const second = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-10-02",
+      to: "2026-10-03",
+      now: now.toISOString(),
+    });
+    expect(first.totalFocusSeconds).toBe(300);
+    expect(second.totalFocusSeconds).toBe(1200);
   });
 });
