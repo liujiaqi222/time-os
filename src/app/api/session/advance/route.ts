@@ -1,10 +1,11 @@
+import { isSameOriginRequest } from "@/auth/same-origin";
 import { readWebSession } from "@/auth/web-session";
 import { sessionContract } from "@/adapters/session-contract";
 import { sessionService } from "@/services";
 import { sessionAdvanceSchema } from "@/shared/schemas/session";
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(request.url).origin)
+  if (!isSameOriginRequest(request))
     return Response.json({ ok: false }, { status: 403 });
   if (!(await readWebSession()))
     return Response.json({ ok: false }, { status: 401 });

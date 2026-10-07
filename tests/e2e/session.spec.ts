@@ -6,19 +6,27 @@ import { loginAndSetup } from "./helpers";
 async function ensureNoActiveSession(page: Page) {
   await page.goto("/today");
   const sessionControl = page.getByRole("button", {
-    name: /暂停（Space）|继续（Space）/,
+    name: /暂停|继续/,
   });
-  if (
-    (await sessionControl.count()) > 0 &&
-    (await sessionControl.isVisible())
-  ) {
-    await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(
+    page
+      .getByRole("button", {
+        name: /开始第一次执行|开始专注|创建目标|取消本次执行/,
+      })
+      .first(),
+  ).toBeVisible();
+  if (await sessionControl.isVisible()) {
+    await page
+      .getByRole("button", { name: "取消本次执行", exact: true })
+      .click();
     await page.getByRole("button", { name: "确定取消" }).click();
   }
   // The page is ready when either the idle panel or the no-goal empty
   // state is up (fresh runs have no goals yet).
   await expect(
-    page.getByRole("button", { name: /开始专注|创建目标/ }).first(),
+    page
+      .getByRole("button", { name: /开始第一次执行|开始专注|创建目标/ })
+      .first(),
   ).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "正计时", exact: true }).click();
   await expect(
@@ -61,8 +69,8 @@ test.describe("Goal-direct execution loop", () => {
     await page.getByLabel("目标", { exact: true }).click();
     await page.getByRole("option", { name: "Ship Execution Loop" }).click();
     await expect(
-      page.getByRole("heading", { name: "Write the first draft" }),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "任务", exact: true }),
+    ).toContainText("Write the first draft");
     await expect(page.getByRole("heading", { name: "目标任务" })).toBeVisible();
 
     // Session-only context is deliberately secondary and explicitly separate
@@ -73,7 +81,8 @@ test.describe("Goal-direct execution loop", () => {
 
     // 3. One click starts; the big timer appears with the paused-capable
     //    primary action.
-    await page.getByRole("button", { name: /开始专注/ }).click();
+    await page.getByRole("button", { name: "正计时", exact: true }).click();
+    await page.getByRole("button", { name: /开始第一次执行|开始专注/ }).click();
     const timer = page.getByRole("timer", { name: "已专注时间" });
     await expect(timer).toBeVisible();
     await expect(page.getByText("正计时中")).toBeVisible();
@@ -84,9 +93,9 @@ test.describe("Goal-direct execution loop", () => {
     await expect(page.getByText("正计时中")).toBeVisible();
 
     // 5. Pause / resume.
-    await page.getByRole("button", { name: /暂停（Space）/ }).click();
+    await page.getByRole("button", { name: /暂停/ }).click();
     await expect(page.getByText("正计时已暂停")).toBeVisible();
-    await page.getByRole("button", { name: /继续（Space）/ }).click();
+    await page.getByRole("button", { name: /继续/ }).click();
     await expect(page.getByText("正计时中")).toBeVisible();
 
     // 6. Note autosave survives a reload.
@@ -107,7 +116,7 @@ test.describe("Goal-direct execution loop", () => {
     await expect(page.getByText("Urgent phone call")).toBeVisible();
 
     // 8. Finish saves directly — no review form (PRD §6.5).
-    await page.getByRole("button", { name: /结束并保存（F）/ }).click();
+    await page.getByRole("button", { name: /结束并保存/ }).click();
     await expect(page.getByText("专注已保存")).toBeVisible();
 
     // 9. Optional completion + resume hint are independent actions.
@@ -122,12 +131,12 @@ test.describe("Goal-direct execution loop", () => {
     await page.getByRole("button", { name: "保存起点并返回" }).click();
     await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Review the second half" }),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "任务", exact: true }),
+    ).toContainText("Review the second half");
     await page.reload();
     await expect(
-      page.getByRole("heading", { name: "Review the second half" }),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "任务", exact: true }),
+    ).toContainText("Review the second half");
   });
 
   test("goal-only execution, keyboard shortcuts, and the hint continuing on the next visit", async ({
@@ -141,20 +150,19 @@ test.describe("Goal-direct execution loop", () => {
     await page.getByLabel("任务", { exact: true }).click();
     await page.getByRole("option", { name: /不设任务|仅围绕目标执行/ }).click();
     await expect(
-      page.getByRole("heading", { name: /围绕目标执行|Ship Execution Loop/ }),
-    ).toBeVisible();
+      page.getByRole("combobox", { name: "任务", exact: true }),
+    ).toContainText("不设任务");
 
-    await page.getByRole("button", { name: /开始专注/ }).click();
+    await page.getByRole("button", { name: "正计时", exact: true }).click();
+    await page.getByRole("button", { name: /开始第一次执行|开始专注/ }).click();
     await expect(
-      page.getByRole("heading", { name: "围绕目标执行" }),
+      page.getByRole("button", { name: "任务 不设任务", exact: true }),
     ).toBeVisible();
 
     // Space pauses without focusing any input first.
     await page.keyboard.press("Space");
     await expect(page.getByText("正计时已暂停")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /继续（Space）/ }),
-    ).toBeEnabled();
+    await expect(page.getByRole("button", { name: /继续/ })).toBeEnabled();
     await page.keyboard.press("Space");
     await expect(page.getByText("正计时中")).toBeVisible();
 
@@ -162,7 +170,7 @@ test.describe("Goal-direct execution loop", () => {
     await page.waitForTimeout(1100);
 
     // Finish; the end card has no Task section for a goal-only run.
-    await page.getByRole("button", { name: /结束并保存（F）/ }).click();
+    await page.getByRole("button", { name: /结束并保存/ }).click();
     await expect(page.getByText("专注已保存")).toBeVisible();
     await expect(
       page.getByRole("button", { name: "标记任务完成" }),
@@ -176,11 +184,14 @@ test.describe("Goal-direct execution loop", () => {
     await expect(page.getByText("周三先跑五公里")).toBeVisible();
 
     // One click starts the next Session; a mis-start cancels cleanly.
-    await page.getByRole("button", { name: /开始专注/ }).click();
+    await page.getByRole("button", { name: "正计时", exact: true }).click();
+    await page.getByRole("button", { name: /开始第一次执行|开始专注/ }).click();
     await expect(
-      page.getByRole("heading", { name: "围绕目标执行" }),
+      page.getByRole("button", { name: "任务 不设任务", exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await page
+      .getByRole("button", { name: "取消本次执行", exact: true })
+      .click();
     await page.getByRole("button", { name: "确定取消" }).click();
     await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
   });
@@ -192,7 +203,8 @@ test.describe("Goal-direct execution loop", () => {
     await ensureNoActiveSession(page);
 
     await page.goto("/today");
-    await page.getByRole("button", { name: /开始专注/ }).click();
+    await page.getByRole("button", { name: "正计时", exact: true }).click();
+    await page.getByRole("button", { name: /开始第一次执行|开始专注/ }).click();
     await expect(page.getByRole("timer", { name: "已专注时间" })).toBeVisible();
 
     // Other pages show the compact banner, never a second timer.
@@ -206,7 +218,9 @@ test.describe("Goal-direct execution loop", () => {
     await expect(page.getByRole("timer", { name: "已专注时间" })).toBeVisible();
 
     // Clean up for the next test.
-    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await page
+      .getByRole("button", { name: "取消本次执行", exact: true })
+      .click();
     await page.getByRole("button", { name: "确定取消" }).click();
     await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();
   });
@@ -219,12 +233,13 @@ test.describe("Goal-direct execution loop", () => {
     await ensureNoActiveSession(page);
 
     await page.goto("/today");
-    await page.getByRole("button", { name: /开始专注/ }).click();
+    await page.getByRole("button", { name: "正计时", exact: true }).click();
+    await page.getByRole("button", { name: /开始第一次执行|开始专注/ }).click();
     const timer = page.getByRole("timer", { name: "已专注时间" });
     await expect(timer).toBeVisible();
 
     // The pause button sits inside the viewport, above the bottom nav.
-    const pause = page.getByRole("button", { name: /暂停（Space）/ });
+    const pause = page.getByRole("button", { name: /暂停/ });
     await expect(pause).toBeVisible();
     const pauseBox = await pause.boundingBox();
     const nav = page.getByRole("navigation", { name: "主导航" });
@@ -235,9 +250,9 @@ test.describe("Goal-direct execution loop", () => {
 
     await pause.click();
     await expect(page.getByText("正计时已暂停")).toBeVisible();
-    await page.getByRole("button", { name: /继续（Space）/ }).click();
+    await page.getByRole("button", { name: /继续/ }).click();
 
-    await page.getByRole("button", { name: /结束并保存（F）/ }).click();
+    await page.getByRole("button", { name: /结束并保存/ }).click();
     await expect(page.getByText("专注已保存")).toBeVisible();
     await page.getByRole("button", { name: "回到今天" }).click();
     await expect(page.getByRole("button", { name: /开始专注/ })).toBeVisible();

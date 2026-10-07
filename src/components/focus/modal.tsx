@@ -37,6 +37,7 @@ export function Modal({
     const overlay = overlayRef.current;
     if (!overlay) return;
 
+    const previousFocus = document.activeElement as HTMLElement | null;
     // Focus the first focusable element on open.
     const firstFocusable =
       overlay.querySelector<HTMLElement>(focusableSelector);
@@ -51,6 +52,11 @@ export function Modal({
 
       const first = focusableElements[0]!;
       const last = focusableElements[focusableElements.length - 1]!;
+      if (!overlay.contains(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
 
       if (e.shiftKey) {
         if (document.activeElement === first) {
@@ -66,14 +72,29 @@ export function Modal({
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
+      if (
+        e.key === "Escape" &&
+        !overlay.querySelector(
+          '[data-slot="select-trigger"][aria-expanded="true"]',
+        )
+      )
+        onCloseRef.current();
     };
 
     document.addEventListener("keydown", handleTrapFocus);
-    document.addEventListener("keydown", handleKeyDown);
+    // Inspect nested popups before their Escape handlers close them.
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
       document.removeEventListener("keydown", handleTrapFocus);
-      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      if (previousFocus?.isConnected) previousFocus.focus();
+      else {
+        const heading = document.querySelector<HTMLElement>("main h1");
+        if (heading) {
+          heading.tabIndex = -1;
+          heading.focus();
+        }
+      }
     };
   }, []);
 

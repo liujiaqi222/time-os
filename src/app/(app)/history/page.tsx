@@ -1,46 +1,13 @@
-import Link from "next/link";
-
 import { HistoryView } from "@/components/history-view";
 import { historyService, settingsService, statisticsService } from "@/services";
-import { goalStatusLabel } from "@/shared/labels";
-import { addLocalDays, localDateStart } from "@/shared/timezone";
+import { localDateKey, localDateStart } from "@/shared/timezone";
 
 interface HistorySearchParams {
-  from?: string;
-  to?: string;
   goalId?: string;
   includeCancelled?: string;
   cursor?: string;
+  taskCursor?: string;
 }
-
-function uuidOrUndefined(value: string | undefined): string | undefined {
-  return value &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
-    )
-    ? value
-    : undefined;
-}
-
-function historyBoundary(
-  value: string | undefined,
-  timezone: string,
-  includeSelectedDay = false,
-): string | undefined {
-  if (!value) return undefined;
-  try {
-    const date = includeSelectedDay ? addLocalDays(value, 1) : value;
-    return localDateStart(date, timezone).toISOString();
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * 足迹 (PRD §7): a functional record view on the new model. The full
- * visual redesign — activity calendar, per-goal browsing, audit filters —
- * arrives with T09.
- */
 export default async function HistoryPage({
   searchParams,
 }: {
@@ -49,122 +16,55 @@ export default async function HistoryPage({
   const query = (await searchParams) ?? {};
   const context = { actor: "web" } as const;
   const settings = await settingsService.get(context);
-  const from = historyBoundary(query.from, settings.timezone);
-  // The date picker is inclusive for people; the service boundary remains
-  // half-open by advancing the selected final local date by one day.
-  const to = historyBoundary(query.to, settings.timezone, true);
-  const invalidRange = Boolean(from && to && from >= to);
-
-  const [page, targets, today, week] = await Promise.all([
+  const now = new Date();
+  const todayKey = localDateKey(now, settings.timezone);
+  const [y, m] = todayKey.split("-").map(Number);
+  const firstMonth = new Date(Date.UTC(y!, m! - 12, 1));
+  const lastMonth = new Date(Date.UTC(y!, m!, 1));
+  const dateKey = (d: Date) => d.toISOString().slice(0, 10);
+  const goalId = query.goalId;
+  const common = {
+    goalId,
+    now: now.toISOString(),
+    timezone: settings.timezone,
+    weekStartsOn: settings.weekStartsOn,
+  };
+  const [all, week, calendar, page, targets, completed] = await Promise.all([
+    statisticsService.getStatistics(context, { ...common, period: "all" }),
+    statisticsService.getStatistics(context, { ...common, period: "week" }),
+    statisticsService.getStatistics(context, {
+      ...common,
+      period: "custom",
+      from: localDateStart(
+        dateKey(firstMonth),
+        settings.timezone,
+      ).toISOString(),
+      to: localDateStart(dateKey(lastMonth), settings.timezone).toISOString(),
+      daily: true,
+    }),
     historyService.listSessions(context, {
-      from: invalidRange ? undefined : from,
-      to: invalidRange ? undefined : to,
-      goalId: uuidOrUndefined(query.goalId),
+      goalId,
       includeCancelled: query.includeCancelled === "true",
-      cursor: uuidOrUndefined(query.cursor),
-      limit: 30,
+      cursor: query.cursor,
     }),
     historyService.listTargets(context),
-    statisticsService.getStatistics(context, { period: "today" }),
-    statisticsService.getStatistics(context, { period: "week" }),
+    historyService.listCompletedTasks(context, {
+      now: now.toISOString(),
+      goalId,
+      cursor: query.taskCursor,
+    }),
   ]);
-
-  const nextParams = new URLSearchParams();
-  if (query.from) nextParams.set("from", query.from);
-  if (query.to) nextParams.set("to", query.to);
-  if (query.goalId) nextParams.set("goalId", query.goalId);
-  if (query.includeCancelled === "true")
-    nextParams.set("includeCancelled", "true");
-  if (page.nextCursor) nextParams.set("cursor", page.nextCursor);
-
   return (
-    <div className="space-y-6">
-      <header>
-        <p className="font-mono text-xs tracking-[0.18em] text-stone-500 uppercase">
-          足迹
-        </p>
-        <h1 className="mt-2 text-4xl font-semibold tracking-tight">真实投入</h1>
-        <p className="mt-2 text-stone-600">
-          可信的执行记录与统计，按 {settings.timezone} 时区计算。
-        </p>
-      </header>
-
-      <form className="grid gap-3 rounded-xl border bg-white p-4 sm:grid-cols-4">
-        <label className="text-sm">
-          从
-          <input
-            type="date"
-            name="from"
-            defaultValue={query.from}
-            className="mt-1 h-9 w-full rounded-lg border px-2"
-          />
-        </label>
-        <label className="text-sm">
-          到
-          <input
-            type="date"
-            name="to"
-            defaultValue={query.to}
-            className="mt-1 h-9 w-full rounded-lg border px-2"
-          />
-        </label>
-        <label className="text-sm">
-          目标
-          <select
-            name="goalId"
-            defaultValue={query.goalId ?? ""}
-            className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
-          >
-            <option value="">全部目标</option>
-            {targets.map(({ goal }) => (
-              <option key={goal.id} value={goal.id}>
-                {goal.title} ({goalStatusLabel[goal.status]})
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="flex items-end gap-3">
-          <label className="flex h-9 items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              name="includeCancelled"
-              value="true"
-              defaultChecked={query.includeCancelled === "true"}
-            />
-            含已取消
-          </label>
-          <button className="h-9 rounded-lg bg-stone-900 px-3 text-sm text-white">
-            应用
-          </button>
-        </div>
-      </form>
-      {invalidRange && (
-        <p
-          role="alert"
-          className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"
-        >
-          开始日期必须早于或等于结束日期，筛选未生效。
-        </p>
-      )}
-
-      <HistoryView
-        sessions={page.items}
-        targets={targets}
-        timezone={settings.timezone}
-        today={today}
-        week={week}
-      />
-
-      {page.nextCursor && (
-        <div className="flex justify-center">
-          <Link
-            href={`/history?${nextParams.toString()}`}
-            className="rounded-lg border bg-white px-4 py-2 text-sm hover:bg-stone-50"
-          >
-            加载更早的执行记录
-          </Link>
-        </div>
-      )}
-    </div>
+    <HistoryView
+      key={`${goalId ?? "all"}:${now.toISOString()}`}
+      all={all}
+      week={week}
+      calendar={calendar}
+      page={page}
+      targets={targets}
+      completed={completed}
+      selectedGoalId={goalId}
+      includeCancelled={query.includeCancelled === "true"}
+    />
   );
 }

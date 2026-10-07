@@ -10,20 +10,27 @@ interface LocalDateTimeParts extends LocalDateParts {
   second: number;
 }
 
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
 export function getZonedParts(
   date: Date,
   timeZone: string,
 ): LocalDateTimeParts {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
+  let formatter = formatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    if (formatters.size >= 32) formatters.clear();
+    formatters.set(timeZone, formatter);
+  }
   const parts = formatter.formatToParts(date);
   const partMap: Record<string, number> = {};
   for (const part of parts) {
@@ -88,7 +95,7 @@ export function localDateStart(date: string, timeZone: string): Date {
   ) {
     throw new RangeError("Date is not a valid calendar day.");
   }
-  return zonedDateTimeToUtc(
+  const candidate = zonedDateTimeToUtc(
     {
       year,
       month,
@@ -99,6 +106,28 @@ export function localDateStart(date: string, timeZone: string): Date {
     },
     timeZone,
   );
+  const observed = getZonedParts(candidate, timeZone);
+  if (
+    observed.year === year &&
+    observed.month === month &&
+    observed.day === day &&
+    observed.hour === 0 &&
+    observed.minute === 0 &&
+    observed.second === 0
+  )
+    return candidate;
+  // Some zones advance at midnight. Find the first instant of that civil
+  // day instead of accepting the previous day's 23:00. A wholly skipped
+  // civil day has an empty interval ending at the next day's boundary.
+  const nominal = Date.UTC(year, month - 1, day) / 1000;
+  let low = nominal - 36 * 3600;
+  let high = nominal + 36 * 3600;
+  while (high - low > 1) {
+    const mid = Math.floor((low + high) / 2);
+    if (localDateKey(new Date(mid * 1000), timeZone) < date) low = mid;
+    else high = mid;
+  }
+  return new Date(high * 1000);
 }
 
 export function parseLocalDateTime(value: string, timeZone: string): Date {
@@ -124,7 +153,7 @@ export function parseLocalDateTime(value: string, timeZone: string): Date {
   ) {
     throw new RangeError("Date and time are not valid.");
   }
-  return zonedDateTimeToUtc(
+  const candidate = zonedDateTimeToUtc(
     {
       year,
       month,
@@ -135,6 +164,19 @@ export function parseLocalDateTime(value: string, timeZone: string): Date {
     },
     timeZone,
   );
+  const observed = getZonedParts(candidate, timeZone);
+  if (
+    observed.year !== year ||
+    observed.month !== month ||
+    observed.day !== day ||
+    observed.hour !== hour ||
+    observed.minute !== minute ||
+    observed.second !== second
+  )
+    throw new RangeError(
+      "This local time does not exist because of a timezone transition.",
+    );
+  return candidate;
 }
 
 export function localDateKey(date: Date, timeZone: string): string {

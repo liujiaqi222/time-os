@@ -99,7 +99,10 @@ export function createDashboardService(
       ] = await Promise.all([
         sessionService.getActiveSession(context),
         selectionService.resolve(context),
-        statisticsService.getStatistics(context, { period: "today" }),
+        statisticsService.getStatistics(context, {
+          period: "today",
+          now: now.toISOString(),
+        }),
         database
           .select({ goal: goals })
           .from(goals)

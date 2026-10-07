@@ -208,7 +208,10 @@ function viewFromFastRow(row: FastSessionRow, now: Date): SessionView {
     task: taskFromJson(row.task),
     intervals,
     serverNow: now.toISOString(),
-    focusSeconds: focusSecondsOfIntervals(intervals, now),
+    focusSeconds:
+      session.timeBasis === "observed"
+        ? focusSecondsOfIntervals(intervals, now)
+        : (session.durationSeconds ?? 0),
     actions:
       timer && (session.status === "active" || session.status === "paused")
         ? [
@@ -760,6 +763,8 @@ export function createSessionService(
         where s.timer_mode = 'pomodoro' and s.status in ('active', 'paused')
           and s.revision = (select snapshot.revision from sessions snapshot where snapshot.id = s.id)
           and p.id = ${value.expectedPhaseId}::uuid and p.advance_action is null
+          and (select count(*) from session_phases fp where fp.session_id = s.id and fp.kind = 'focus')
+            < coalesce((s.timer_config->>'iterations')::integer, 4)
           and (
             (p.kind = 'focus' and (p.ended_at is not null or p.paused_at is null and p.deadline_at <= ${now}))
             or (${value.action}::text = 'start_next_focus' and p.kind <> 'focus')

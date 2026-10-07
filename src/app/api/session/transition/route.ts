@@ -1,3 +1,4 @@
+import { isSameOriginRequest } from "@/auth/same-origin";
 import { z } from "zod";
 
 import { readWebSession } from "@/auth/web-session";
@@ -11,7 +12,7 @@ const inputSchema = sessionPauseSchema
 
 // Timer controls must not wait in the client's Server Action queue for autosave or reads.
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(request.url).origin)
+  if (!isSameOriginRequest(request))
     return Response.json({ ok: false }, { status: 403 });
   if (!(await readWebSession()))
     return Response.json({ ok: false }, { status: 401 });

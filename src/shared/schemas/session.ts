@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { timezoneSchema } from "./timezone";
 
 export const sessionStatusSchema = z.enum([
   "active",
@@ -117,7 +118,9 @@ export const sessionListSchema = z.object({
   entryMode: z.enum(["timer", "manual"]).optional(),
   createdVia: z.enum(["web", "mcp"]).optional(),
   includeCancelled: z.boolean().default(false),
-  cursor: z.string().uuid().optional(),
+  dateMode: z.enum(["started", "focus"]).default("started"),
+  now: instantSchema.optional(),
+  cursor: z.string().trim().min(1).max(512).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
@@ -127,6 +130,7 @@ export const sessionLogSchema = z
     goalId: z.string().uuid(),
     taskId: nullableUuidSchema,
     durationSeconds: z.coerce.number().int().positive().max(31_536_000),
+    startedAt: instantSchema.optional(),
     endedAt: instantSchema.optional(),
     intent: intentText.optional(),
     note: noteText.optional(),
@@ -151,6 +155,7 @@ export const sessionUpdateSchema = z
       .optional(),
     intent: intentText.optional(),
     note: noteText.optional(),
+    expectedRevision: versionSchema.optional(),
     expectedNoteVersion: versionSchema.optional(),
     resumeHint: noteText.optional(),
     expectedResumeHintVersion: versionSchema.optional(),
@@ -160,7 +165,13 @@ export const sessionUpdateSchema = z
 
 export const statsQuerySchema = z
   .object({
-    period: z.enum(["today", "week", "month", "custom"]).default("today"),
+    period: z
+      .enum(["today", "week", "month", "custom", "all"])
+      .default("today"),
+    goalId: z.string().uuid().optional(),
+    timezone: timezoneSchema.optional(),
+    weekStartsOn: z.coerce.number().int().min(0).max(1).optional(),
+    daily: z.boolean().default(false),
     from: z.string().optional(),
     to: z.string().optional(),
     now: instantSchema.optional(),

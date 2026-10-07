@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import {
   LoaderCircle,
   Pause,
@@ -79,7 +85,7 @@ export function RunPanel({
     note: string | null;
     expectedVersion: number;
     changed: boolean;
-  }) => void;
+  }) => Promise<boolean>;
   onOpenCancel: () => void;
   onBusyChange: (action: RunBusyAction) => void;
 }) {
@@ -93,8 +99,11 @@ export function RunPanel({
   const completedFocusCount =
     (session.completedFocusCount ?? 0) +
     (due && phase?.kind === "focus" && !phase.complete ? 1 : 0);
-  const pendingBreak = due && phase?.kind === "focus";
-  const pendingFocus = due && !!rest;
+  const allComplete =
+    session.timerMode === "pomodoro" &&
+    completedFocusCount >= config.iterations;
+  const pendingBreak = !allComplete && due && phase?.kind === "focus";
+  const pendingFocus = !allComplete && due && !!rest;
   const breakKind =
     config.longBreakEnabled &&
     completedFocusCount > 0 &&
@@ -107,13 +116,15 @@ export function RunPanel({
       ? breakKind
       : (phase?.kind ?? "focus");
   const colors = phaseColors[displayKind];
-  const clockSeconds = pendingBreak
-    ? (breakKind === "long_break"
-        ? config.longBreakMinutes
-        : config.shortBreakMinutes) * 60
-    : pendingFocus
-      ? config.focusMinutes * 60
-      : display.seconds;
+  const clockSeconds = allComplete
+    ? 0
+    : pendingBreak
+      ? (breakKind === "long_break"
+          ? config.longBreakMinutes
+          : config.shortBreakMinutes) * 60
+      : pendingFocus
+        ? config.focusMinutes * 60
+        : display.seconds;
   const label =
     displayKind === "long_break"
       ? "长休息"
@@ -236,14 +247,37 @@ export function RunPanel({
   // Space pause/resume, F finish, D distraction — only when not typing
   // and no dialog is open (PRD §8.3).
   const handleFinish = async () => {
-    if (busy !== "none") return;
+    if (busy !== "none") return false;
     const flushed = await noteAutosave.flush();
-    onFinishRequested({
+    return onFinishRequested({
       note: flushed.note,
       expectedVersion: flushed.expectedVersion,
       changed: flushed.changed,
     });
   };
+
+  const automaticFinishRef = useRef<string | null>(null);
+  const [automaticSaveFailed, setAutomaticSaveFailed] = useState(false);
+  const saveCompletedSession = async () => {
+    setAutomaticSaveFailed(false);
+    try {
+      if (!(await handleFinish())) setAutomaticSaveFailed(true);
+    } catch {
+      setAutomaticSaveFailed(true);
+    }
+  };
+  const finishAutomatically = useEffectEvent(saveCompletedSession);
+  useEffect(() => {
+    if (
+      !allComplete ||
+      busy !== "none" ||
+      automaticFinishRef.current === session.id
+    )
+      return;
+    // One attempt per mounted execution; failures retain an explicit retry.
+    automaticFinishRef.current = session.id;
+    void finishAutomatically();
+  }, [allComplete, busy, session.id]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -331,11 +365,13 @@ export function RunPanel({
               role="status"
               className={`text-base leading-none font-medium ${colors.text}`}
             >
-              {pendingBreak || pendingFocus
-                ? label
-                : due
-                  ? `${label}已到时`
-                  : `${label}${isPaused ? "已暂停" : "中"}`}
+              {allComplete
+                ? "番茄钟全部完成"
+                : pendingBreak || pendingFocus
+                  ? label
+                  : due
+                    ? `${label}已到时`
+                    : `${label}${isPaused ? "已暂停" : "中"}`}
             </p>
             <FocusClock
               role="timer"
@@ -354,6 +390,14 @@ export function RunPanel({
             />
           </div>
         </TimerStage>
+        {allComplete && (
+          <p className="mt-4 text-sm text-stone-600">
+            已完成全部 {config.iterations} 轮专注，辛苦了！
+            {automaticSaveFailed
+              ? "保存失败，请重试。"
+              : "正在自动保存本次投入…"}
+          </p>
+        )}
         {commandError && (
           <p role="alert" className="mt-4 text-sm text-red-700">
             {commandError}
@@ -362,7 +406,18 @@ export function RunPanel({
 
         <TooltipProvider delay={200}>
           <div className="mt-7 flex w-full flex-wrap items-center justify-center gap-2">
-            {due ? (
+            {allComplete ? (
+              <Button
+                size="lg"
+                disabled={busy !== "none" || !automaticSaveFailed}
+                onClick={() => void saveCompletedSession()}
+                className="h-12 rounded-xl bg-[#537d61] px-6 text-white hover:bg-[#456950]"
+              >
+                {automaticSaveFailed && busy !== "finish"
+                  ? "重试保存"
+                  : "正在自动保存…"}
+              </Button>
+            ) : due ? (
               <>
                 {!rest && (
                   <Button
@@ -435,30 +490,34 @@ export function RunPanel({
                 )}
               </>
             )}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    disabled={busy !== "none"}
-                    onClick={handleFinish}
-                    aria-label={busy === "finish" ? "结束保存中" : "结束并保存"}
-                    className="size-12 rounded-xl border-stone-300 bg-white"
-                  />
-                }
-              >
-                {busy === "finish" ? (
-                  <LoaderCircle
-                    className="size-5 animate-spin"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <Square className="size-5" aria-hidden="true" />
-                )}
-              </TooltipTrigger>
-              <TooltipContent>结束并保存（F）</TooltipContent>
-            </Tooltip>
+            {!allComplete && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      disabled={busy !== "none"}
+                      onClick={handleFinish}
+                      aria-label={
+                        busy === "finish" ? "结束保存中" : "结束并保存"
+                      }
+                      className="size-12 rounded-xl border-stone-300 bg-white"
+                    />
+                  }
+                >
+                  {busy === "finish" ? (
+                    <LoaderCircle
+                      className="size-5 animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Square className="size-5" aria-hidden="true" />
+                  )}
+                </TooltipTrigger>
+                <TooltipContent>结束并保存（F）</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger
                 render={

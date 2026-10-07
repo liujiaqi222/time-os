@@ -63,6 +63,36 @@ describe("authoritative pomodoro projection", () => {
       ),
     ).toBe(1500);
   });
+  it.each([1, 4, 5])(
+    "stops at %i configured rounds, including a locally projected deadline",
+    (iterations) => {
+      const phases = Array.from({ length: iterations }, (_, index) => ({
+        ...phase,
+        id: String(index),
+        sequence: index + 1,
+        endedAt: index < iterations - 1 ? deadline : null,
+        complete: index < iterations - 1,
+      }));
+      const view = projectPhases(
+        { ...session, timerConfig: { iterations } },
+        phases,
+        deadline,
+      );
+      expect(view.completedFocusCount).toBe(iterations);
+      expect(view.phaseActions).toEqual([]);
+      expect(view.phase?.state).toBe("due");
+      // Old sessions which already exceeded their plan cannot advance again.
+      const legacy = projectPhases(
+        { ...session, timerConfig: { iterations } },
+        [
+          ...view.phases,
+          { ...phase, kind: "long_break", sequence: iterations + 1 },
+        ],
+        start,
+      );
+      expect(legacy.phaseActions).toEqual([]);
+    },
+  );
   it("projects pause without treating a missing deadline as due", () => {
     const view = projectPhases(
       { ...session, status: "paused" },

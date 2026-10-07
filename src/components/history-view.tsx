@@ -1,709 +1,483 @@
 "use client";
-
-import { useMemo, useState, useTransition } from "react";
+import { HistorySelect } from "@/components/history/history-select";
+import Link from "next/link";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-
 import {
-  archiveHistoryDistractionAction,
-  cancelHistorySessionAction,
+  getHistoryDayAction,
   getHistorySessionAction,
-  logSessionAction,
-  updateHistoryDistractionAction,
-  updateHistorySessionAction,
 } from "@/app/(app)/history/actions";
-import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { ActivityCalendar } from "@/components/history/activity-calendar";
+import { RecordDialog } from "@/components/history/record-dialog";
+import { Modal } from "@/components/focus/modal";
+import { Button } from "@/components/ui/button";
 import type {
   HistorySession,
   HistorySessionDetail,
+  SessionPage,
   SessionTarget,
 } from "@/services/history";
 import type { Statistics } from "@/services/statistics";
-import { getZonedParts, localDateKey } from "@/shared/timezone";
-import {
-  goalStatusLabel,
-  sessionCreatedViaLabel,
-  sessionEntryModeLabel,
-  sessionStatusLabel,
-  taskStatusLabel,
-  timeBasisLabel,
-} from "@/shared/labels";
+import type { Goal, Task } from "@/db/schema";
+import { durationLabel } from "@/shared/duration-label";
+import { localDateKey } from "@/shared/timezone";
+import { goalStatusLabel, timeBasisLabel } from "@/shared/labels";
 
-function durationLabel(seconds: number) {
-  const roundedMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(roundedMinutes / 60);
-  const minutes = roundedMinutes % 60;
-  return hours ? `${hours}时 ${minutes}分` : `${minutes}分`;
-}
-
-function localInputValue(date: Date | string, timezone: string) {
-  const parts = getZonedParts(new Date(date), timezone);
-  return `${parts.year.toString().padStart(4, "0")}-${parts.month
-    .toString()
-    .padStart(2, "0")}-${parts.day.toString().padStart(2, "0")}T${parts.hour
-    .toString()
-    .padStart(2, "0")}:${parts.minute.toString().padStart(2, "0")}`;
-}
-
-function sessionDuration(session: HistorySession): number | null {
-  if (session.status === "completed") return session.durationSeconds ?? 0;
-  // Live Sessions are owned by the execution page; history shows their
-  // state without guessing a live number.
-  return null;
-}
-
-function ErrorMessage({ error }: { error: string | null }) {
-  if (!error) return null;
+type CompletedPage = {
+  items: (Task & { goal: Goal })[];
+  nextCursor: string | null;
+};
+type Day = {
+  date: string;
+  stats: Statistics;
+  page: SessionPage;
+  completed: CompletedPage;
+};
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <p
-      role="alert"
-      className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"
-    >
-      {error}
-    </p>
-  );
-}
-
-function SessionRow({
-  session,
-  targets,
-  timezone,
-}: {
-  session: HistorySession;
-  targets: SessionTarget[];
-  timezone: string;
-}) {
-  const router = useRouter();
-  const [detail, setDetail] = useState<HistorySessionDetail | null>(null);
-  const [open, setOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [overlap, setOverlap] = useState(false);
-  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const [pending, startTransition] = useTransition();
-  const [goalId, setGoalId] = useState(session.goalId);
-  const [taskId, setTaskId] = useState(session.taskId ?? "");
-  const [startedAt, setStartedAt] = useState(
-    localInputValue(session.startedAt, timezone),
-  );
-  const [endedAt, setEndedAt] = useState(
-    session.endedAt ? localInputValue(session.endedAt, timezone) : "",
-  );
-  const [note, setNote] = useState(session.note ?? "");
-  const selectedTarget = targets.find((target) => target.goal.id === goalId);
-
-  function loadDetail() {
-    const nextOpen = !open;
-    setOpen(nextOpen);
-    if (!nextOpen || detail) return;
-    startTransition(async () => {
-      const result = await getHistorySessionAction(session.id);
-      if (result.ok) setDetail(result.data);
-      else setError(result.error.message);
-    });
-  }
-
-  function save(allowOverlap: boolean) {
-    setError(null);
-    setOverlap(false);
-    startTransition(async () => {
-      const result = await updateHistorySessionAction({
-        id: session.id,
-        goalId,
-        taskId: taskId || null,
-        startedAtLocal: startedAt,
-        endedAtLocal: endedAt,
-        note: note || null,
-        allowOverlap,
-      });
-      if (!result.ok) {
-        setError(
-          result.error.code === "SESSION_TIME_OVERLAP"
-            ? "这段专注与已有记录的时间冲突。"
-            : result.error.message,
-        );
-        setOverlap(result.error.code === "SESSION_TIME_OVERLAP");
-        return;
-      }
-      router.refresh();
-    });
-  }
-
-  function cancel() {
-    startTransition(async () => {
-      const result = await cancelHistorySessionAction(session.id);
-      if (!result.ok) setError(result.error.message);
-      else {
-        setCancelDialogOpen(false);
-        router.refresh();
-      }
-    });
-  }
-
-  const duration = sessionDuration(session);
-
-  return (
-    <li className="rounded-xl border bg-white">
-      <button
-        type="button"
-        onClick={loadDetail}
-        className="flex w-full items-center justify-between gap-4 p-4 text-left"
-        aria-expanded={open}
-      >
-        <span className="min-w-0">
-          <span className="flex flex-wrap items-center gap-2">
-            <strong className="truncate">{session.goal.title}</strong>
-            <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">
-              {sessionStatusLabel[session.status]}
-            </span>
-            <span className="text-xs text-stone-500">
-              {timeBasisLabel[session.timeBasis]}
-            </span>
-            {session.entryMode === "manual" && (
-              <span className="text-xs text-stone-500">
-                {sessionEntryModeLabel.manual}
-              </span>
-            )}
-          </span>
-          <span className="mt-1 block truncate text-sm text-stone-600">
-            {session.task?.title ?? "围绕目标"} ·{" "}
-            {new Intl.DateTimeFormat("zh-CN", {
-              timeZone: timezone,
-              hour: "2-digit",
-              minute: "2-digit",
-            }).format(new Date(session.startedAt))}
-          </span>
-        </span>
-        <span className="shrink-0 font-mono text-sm font-medium">
-          {duration === null ? "—" : durationLabel(duration)}
-        </span>
-      </button>
-
-      {open && (
-        <div className="space-y-5 border-t p-4">
-          {pending && !detail ? (
-            <p className="text-sm text-stone-500">加载详情…</p>
-          ) : (
-            <>
-              <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-stone-500">来源</dt>
-                  <dd>
-                    {sessionEntryModeLabel[session.entryMode]} ·{" "}
-                    {sessionCreatedViaLabel[session.createdVia]} ·{" "}
-                    {timeBasisLabel[session.timeBasis]}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-stone-500">有效时长</dt>
-                  <dd>
-                    {duration === null
-                      ? "进行中（在今天页查看实时时间）"
-                      : durationLabel(duration)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-stone-500">开始</dt>
-                  <dd>
-                    {new Intl.DateTimeFormat("zh-CN", {
-                      timeZone: timezone,
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    }).format(new Date(session.startedAt))}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-stone-500">结束</dt>
-                  <dd>
-                    {session.endedAt
-                      ? new Intl.DateTimeFormat("zh-CN", {
-                          timeZone: timezone,
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        }).format(new Date(session.endedAt))
-                      : "进行中"}
-                  </dd>
-                </div>
-              </dl>
-              {session.intent && (
-                <div className="text-sm">
-                  <h3 className="text-stone-500">本次意图</h3>
-                  <p className="whitespace-pre-wrap">{session.intent}</p>
-                </div>
-              )}
-              <div className="text-sm">
-                <h3 className="text-stone-500">笔记</h3>
-                <p className="whitespace-pre-wrap">{session.note || "—"}</p>
-              </div>
-              {session.resumeHint && (
-                <div className="text-sm">
-                  <h3 className="text-stone-500">接续提示</h3>
-                  <p className="whitespace-pre-wrap">{session.resumeHint}</p>
-                </div>
-              )}
-
-              {(session.status === "active" || session.status === "paused") && (
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => setCancelDialogOpen(true)}
-                  className="rounded-lg px-3 py-2 text-sm text-red-700 hover:bg-red-50"
-                >
-                  取消这段专注
-                </button>
-              )}
-
-              {session.status === "completed" && (
-                <div className="space-y-3 rounded-lg bg-stone-50 p-3">
-                  <h3 className="font-medium">更正记录</h3>
-                  <p className="text-xs text-stone-500">
-                    修改时间后统计按「已更正」口径分摊；原始区间保留为来源。
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="text-sm">
-                      目标
-                      <select
-                        value={goalId}
-                        onChange={(event) => {
-                          setGoalId(event.target.value);
-                          setTaskId("");
-                        }}
-                        className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
-                      >
-                        {targets.map((target) => (
-                          <option key={target.goal.id} value={target.goal.id}>
-                            {target.goal.title} (
-                            {goalStatusLabel[target.goal.status]})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-sm">
-                      任务
-                      <select
-                        value={taskId}
-                        onChange={(event) => setTaskId(event.target.value)}
-                        className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
-                      >
-                        <option value="">无任务</option>
-                        {selectedTarget?.tasks.map((task) => (
-                          <option key={task.id} value={task.id}>
-                            {task.title} ({taskStatusLabel[task.status]})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-sm">
-                      开始
-                      <input
-                        type="datetime-local"
-                        required
-                        value={startedAt}
-                        onChange={(event) => setStartedAt(event.target.value)}
-                        className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
-                      />
-                    </label>
-                    <label className="text-sm">
-                      结束
-                      <input
-                        type="datetime-local"
-                        required
-                        value={endedAt}
-                        onChange={(event) => setEndedAt(event.target.value)}
-                        className="mt-1 h-9 w-full rounded-lg border bg-white px-2"
-                      />
-                    </label>
-                    <label className="text-sm sm:col-span-2">
-                      笔记
-                      <textarea
-                        value={note}
-                        onChange={(event) => setNote(event.target.value)}
-                        rows={3}
-                        className="mt-1 w-full rounded-lg border bg-white p-2"
-                      />
-                    </label>
-                  </div>
-                  <ErrorMessage error={error} />
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => save(false)}
-                      className="rounded-lg bg-stone-900 px-3 py-2 text-sm text-white disabled:opacity-50"
-                    >
-                      保存修改
-                    </button>
-                    {overlap && (
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => save(true)}
-                        className="rounded-lg border border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-                      >
-                        确认重叠
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => setCancelDialogOpen(true)}
-                      className="rounded-lg px-3 py-2 text-sm text-red-700 hover:bg-red-50"
-                    >
-                      取消这段专注
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <h3 className="mb-2 font-medium">打断</h3>
-                {!detail?.distractions.length ? (
-                  <p className="text-sm text-stone-500">没有记录的打断。</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {detail.distractions.map((distraction) => (
-                      <DistractionRow
-                        key={distraction.id}
-                        distraction={distraction}
-                        onChanged={() => {
-                          setDetail(null);
-                          setOpen(false);
-                          router.refresh();
-                        }}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-      {cancelDialogOpen && (
-        <ConfirmationDialog
-          titleId={`cancel-history-session-${session.id}`}
-          title="取消这段专注？"
-          description="取消后不会计入统计，但记录仍会保留在审计视图中。这个操作不能直接撤销。"
-          confirmLabel="确认取消"
-          cancelLabel="保留这段专注"
-          pending={pending}
-          error={error}
-          tone="danger"
-          onClose={() => setCancelDialogOpen(false)}
-          onConfirm={cancel}
-        />
-      )}
-    </li>
-  );
-}
-
-function DistractionRow({
-  distraction,
-  onChanged,
-}: {
-  distraction: HistorySessionDetail["distractions"][number];
-  onChanged: () => void;
-}) {
-  const [text, setText] = useState(distraction.text ?? "");
-  const [pending, startTransition] = useTransition();
-  return (
-    <li className={`flex gap-2 ${distraction.archivedAt ? "opacity-50" : ""}`}>
-      <input
-        value={text}
-        disabled={pending || Boolean(distraction.archivedAt)}
-        onChange={(event) => setText(event.target.value)}
-        className="h-8 min-w-0 flex-1 rounded-lg border px-2 text-sm"
-        aria-label="打断内容"
-      />
-      {!distraction.archivedAt && (
-        <>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() =>
-              startTransition(async () => {
-                const result = await updateHistoryDistractionAction(
-                  distraction.id,
-                  text || null,
-                );
-                if (result.ok) onChanged();
-              })
-            }
-            className="rounded-lg border px-2 text-xs"
-          >
-            保存
-          </button>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() =>
-              startTransition(async () => {
-                const result = await archiveHistoryDistractionAction(
-                  distraction.id,
-                );
-                if (result.ok) onChanged();
-              })
-            }
-            className="rounded-lg px-2 text-xs text-red-700"
-          >
-            归档
-          </button>
-        </>
-      )}
-    </li>
-  );
-}
-
-function AddSessionForm({
-  targets,
-  timezone,
-}: {
-  targets: SessionTarget[];
-  timezone: string;
-}) {
-  const router = useRouter();
-  const [goalId, setGoalId] = useState(targets[0]?.goal.id ?? "");
-  const [taskId, setTaskId] = useState("");
-  const [durationMinutes, setDurationMinutes] = useState("30");
-  const [endedAt, setEndedAt] = useState(() =>
-    localInputValue(new Date(), timezone),
-  );
-  const [note, setNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [overlap, setOverlap] = useState(false);
-  const [idempotencyKey, setIdempotencyKey] = useState(() =>
-    crypto.randomUUID(),
-  );
-  const [pending, startTransition] = useTransition();
-  const selectedTarget = targets.find((target) => target.goal.id === goalId);
-
-  function submit(allowOverlap: boolean) {
-    setError(null);
-    setOverlap(false);
-    startTransition(async () => {
-      const result = await logSessionAction({
-        goalId,
-        taskId: taskId || null,
-        durationMinutes: Number(durationMinutes),
-        endedAtLocal: endedAt,
-        note: note || null,
-        allowOverlap,
-        idempotencyKey,
-      });
-      if (!result.ok) {
-        const context = result.error.context;
-        setError(
-          result.error.code === "SESSION_TIME_OVERLAP" && context
-            ? `这段专注与「${context.goal}」的时间冲突（${context.startedAt} – ${context.endedAt ?? "进行中"}）。`
-            : result.error.message,
-        );
-        setOverlap(result.error.code === "SESSION_TIME_OVERLAP");
-        return;
-      }
-      setNote("");
-      setIdempotencyKey(crypto.randomUUID());
-      router.refresh();
-    });
-  }
-
-  if (!targets.length)
-    return (
-      <p className="text-sm text-stone-500">先创建一个目标，才能补录时间。</p>
-    );
-
-  return (
-    <section className="rounded-2xl border bg-stone-50 p-4 sm:p-5">
-      <h2 className="text-lg font-semibold">补录一段</h2>
-      <p className="mt-1 text-sm text-stone-600">
-        时间按 {timezone} 计算；手动补录会立即标记为已完成，不计入当前选择。
+    <div>
+      <p className="text-xs text-stone-500">{label}</p>
+      <p className="mt-2 text-xl font-semibold tracking-tight break-words sm:text-2xl">
+        {value}
       </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="text-sm">
-          目标
-          <select
-            value={goalId}
-            onChange={(event) => {
-              setGoalId(event.target.value);
-              setTaskId("");
-            }}
-            className="mt-1 h-10 w-full rounded-lg border bg-white px-2"
-          >
-            {targets.map((target) => (
-              <option key={target.goal.id} value={target.goal.id}>
-                {target.goal.title} ({goalStatusLabel[target.goal.status]})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm">
-          任务（可选）
-          <select
-            value={taskId}
-            onChange={(event) => setTaskId(event.target.value)}
-            className="mt-1 h-10 w-full rounded-lg border bg-white px-2"
-          >
-            <option value="">无任务</option>
-            {selectedTarget?.tasks.map((task) => (
-              <option key={task.id} value={task.id}>
-                {task.title} ({taskStatusLabel[task.status]})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm">
-          时长（分钟）
-          <input
-            type="number"
-            min="1"
-            required
-            value={durationMinutes}
-            onChange={(event) => setDurationMinutes(event.target.value)}
-            className="mt-1 h-10 w-full rounded-lg border bg-white px-2"
-          />
-        </label>
-        <label className="text-sm">
-          结束于
-          <input
-            type="datetime-local"
-            required
-            value={endedAt}
-            onChange={(event) => setEndedAt(event.target.value)}
-            className="mt-1 h-10 w-full rounded-lg border bg-white px-2"
-          />
-        </label>
-        <label className="text-sm sm:col-span-2 lg:col-span-4">
-          笔记
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            rows={2}
-            className="mt-1 w-full rounded-lg border bg-white p-2"
-          />
-        </label>
-      </div>
-      <div className="mt-3">
-        <ErrorMessage error={error} />
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={pending || !goalId}
-          onClick={() => submit(false)}
-          className="rounded-lg bg-stone-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-        >
-          {pending ? "保存中…" : "补录一段"}
-        </button>
-        {overlap && (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => submit(true)}
-            className="rounded-lg border border-amber-500 bg-amber-50 px-4 py-2 text-sm text-amber-900"
-          >
-            仍然保存
-          </button>
-        )}
-      </div>
-    </section>
+    </div>
   );
 }
-
-export function HistoryView({
+function SessionList({
   sessions,
-  targets,
   timezone,
-  today,
-  week,
+  onOpen,
 }: {
   sessions: HistorySession[];
-  targets: SessionTarget[];
   timezone: string;
-  today: Statistics;
-  week: Statistics;
+  onOpen: (id: string) => void;
 }) {
-  const groups = useMemo(() => {
-    const grouped = new Map<string, HistorySession[]>();
-    for (const session of sessions) {
-      const key = localDateKey(new Date(session.startedAt), timezone);
-      grouped.set(key, [...(grouped.get(key) ?? []), session]);
-    }
-    return grouped;
-  }, [sessions, timezone]);
-
+  const groups = new Map<string, HistorySession[]>();
+  for (const session of sessions) {
+    const key = localDateKey(new Date(session.startedAt), timezone);
+    groups.set(key, [...(groups.get(key) ?? []), session]);
+  }
   return (
     <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-5">
-        <Stat label="今日专注" value={durationLabel(today.totalFocusSeconds)} />
-        <Stat label="本周专注" value={durationLabel(week.totalFocusSeconds)} />
-        <Stat label="本周次数" value={String(week.sessionCount)} />
-        <Stat label="本周完成" value={String(week.completedTaskCount)} />
-        <Stat label="专注天数" value={String(week.focusDays)} />
-      </div>
-      {week.byGoal.length > 0 && (
-        <section className="rounded-xl border bg-white p-4">
-          <h2 className="font-semibold">本周投入分布</h2>
-          <ul className="mt-3 space-y-2">
-            {week.byGoal.map((goal) => (
+      {[...groups].map(([date, rows]) => (
+        <section key={date}>
+          <h3 className="mb-3 text-xs font-medium text-stone-500">{date}</h3>
+          <ul className="space-y-2">
+            {rows.map((s) => (
               <li
-                key={goal.goalId}
-                className="flex items-center justify-between gap-4 text-sm"
+                key={s.id}
+                className="rounded-xl border border-stone-200 bg-white"
               >
-                <span>
-                  {goal.title}{" "}
-                  <span className="text-stone-400">
-                    ({goalStatusLabel[goal.status]})
+                <button
+                  type="button"
+                  onClick={() => onOpen(s.id)}
+                  className="flex w-full items-start justify-between gap-3 rounded-xl p-4 text-left hover:bg-stone-50 focus-visible:outline-2 focus-visible:outline-[#537d61]"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium break-words">
+                      {s.task?.title ?? s.intent ?? s.goal.title}
+                    </p>
+                    <p className="mt-1 text-xs break-words text-stone-500">
+                      {s.goal.title} · {timeBasisLabel[s.timeBasis]}
+                      {s.status === "cancelled" ? " · 已取消" : ""}
+                    </p>
+                    {(s.note || s.resumeHint) && (
+                      <p className="mt-2 line-clamp-2 text-xs leading-5 break-words text-stone-500">
+                        {s.resumeHint ? `下次：${s.resumeHint}` : s.note}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 text-xs text-stone-600">
+                    {s.status === "active"
+                      ? "执行中"
+                      : s.status === "paused"
+                        ? "已暂停"
+                        : durationLabel(s.durationSeconds ?? 0)}
                   </span>
-                </span>
-                <strong>{durationLabel(goal.focusSeconds)}</strong>
+                </button>
               </li>
             ))}
           </ul>
         </section>
-      )}
-      <AddSessionForm targets={targets} timezone={timezone} />
-      {!sessions.length ? (
-        <div className="rounded-2xl border border-dashed p-10 text-center text-stone-500">
-          没有符合筛选的执行记录。
-        </div>
-      ) : (
-        [...groups.entries()].map(([date, items]) => (
-          <section key={date} className="space-y-2">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-lg font-semibold">
-                {new Intl.DateTimeFormat("zh-CN", {
-                  timeZone: "UTC",
-                  dateStyle: "full",
-                }).format(new Date(`${date}T12:00:00Z`))}
-              </h2>
-              <span className="text-sm text-stone-500">
-                {durationLabel(
-                  items.reduce(
-                    (sum, item) => sum + (sessionDuration(item) ?? 0),
-                    0,
-                  ),
-                )}
-              </span>
-            </div>
-            <ul className="space-y-2">
-              {items.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  targets={targets}
-                  timezone={timezone}
-                />
-              ))}
-            </ul>
-          </section>
-        ))
-      )}
+      ))}
     </div>
   );
 }
-
-function Stat({ label, value }: { label: string; value: string }) {
+function CompletedList({
+  items,
+  timezone,
+}: {
+  items: CompletedPage["items"];
+  timezone: string;
+}) {
   return (
-    <div className="rounded-xl border bg-white p-4">
-      <p className="text-xs tracking-wide text-stone-500 uppercase">{label}</p>
-      <p className="mt-1 text-2xl font-semibold">{value}</p>
+    <ul className="space-y-3">
+      {items.map((t) => (
+        <li
+          key={t.id}
+          className="flex items-start gap-3 rounded-xl bg-[#edf3ee] p-4"
+        >
+          <span aria-hidden="true" className="text-[#537d61]">
+            ✓
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium break-words">{t.title}</p>
+            <p className="mt-1 text-xs break-words text-stone-500">
+              {t.goal.title} ·{" "}
+              {localDateKey(new Date(t.completedAt!), timezone)}
+            </p>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+export function HistoryView({
+  all,
+  week,
+  calendar,
+  page,
+  targets,
+  completed,
+  includeCancelled,
+  selectedGoalId,
+}: {
+  all: Statistics;
+  week: Statistics;
+  calendar: Statistics;
+  page: SessionPage;
+  targets: SessionTarget[];
+  completed: CompletedPage;
+  includeCancelled: boolean;
+  selectedGoalId?: string;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [day, setDay] = useState<Day | null>(null);
+  const [detail, setDetail] = useState<HistorySessionDetail>();
+  const [adding, setAdding] = useState(false);
+  const [goalId, setGoalId] = useState(selectedGoalId ?? "");
+  const timezone = all.timezone;
+  const today = localDateKey(new Date(all.serverNow), timezone);
+  function href(params: {
+    cursor?: string;
+    taskCursor?: string;
+    includeCancelled?: boolean;
+    goalId?: string;
+  }) {
+    const search = new URLSearchParams();
+    const goal = params.goalId ?? selectedGoalId;
+    if (goal) search.set("goalId", goal);
+    if (params.includeCancelled ?? includeCancelled)
+      search.set("includeCancelled", "true");
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.taskCursor) search.set("taskCursor", params.taskCursor);
+    return `/history${search.size ? `?${search}` : ""}`;
+  }
+  function openDay(date: string, cursor?: string, taskCursor?: string) {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await getHistoryDayAction({
+          date,
+          timezone,
+          weekStartsOn: calendar.weekStartsOn,
+          goalId: selectedGoalId || undefined,
+          cursor,
+          taskCursor,
+          now: new Date(calendar.serverNow).toISOString(),
+        });
+        if (!result.ok) {
+          setError("当天记录没能加载，请重新选择日期重试。");
+          return;
+        }
+        setDay({ date, ...result.data });
+      } catch {
+        setError("连接失败，请重新选择日期重试。");
+      }
+    });
+  }
+  function openRecord(id: string) {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await getHistorySessionAction(id);
+        if (result.ok) setDetail(result.data);
+        else setError("记录详情没能加载，请重试。");
+      } catch {
+        setError("连接失败，请重试。");
+      }
+    });
+  }
+  return (
+    <div className="mx-auto max-w-5xl space-y-7 pb-8">
+      <header className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="font-mono text-xs tracking-[0.18em] text-stone-500">
+            足迹
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+            时间留下的痕迹
+          </h1>
+          <p className="mt-3 text-sm break-words text-stone-500">
+            {selectedGoalId
+              ? targets.find((t) => t.goal.id === selectedGoalId)?.goal.title
+              : "每一次开始，都有真实的积累。"}
+          </p>
+        </div>
+        {targets.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+            补录一段
+          </Button>
+        )}
+      </header>
+      <section
+        aria-label="投入摘要"
+        className="grid grid-cols-2 gap-x-5 gap-y-6 rounded-2xl bg-[#edf3ee] px-5 py-6 sm:grid-cols-4 sm:px-7"
+      >
+        <Stat
+          label="累计投入"
+          value={durationLabel(all.totalFocusSeconds, "minutes")}
+        />
+        <Stat label="本周投入" value={durationLabel(week.totalFocusSeconds)} />
+        <Stat label="累计有效执行" value={`${all.sessionCount} 次`} />
+        <Stat label="本周完成事项" value={`${week.completedTaskCount} 件`} />
+      </section>
+      <ActivityCalendar
+        daily={calendar.daily}
+        today={today}
+        weekStartsOn={calendar.weekStartsOn}
+        onDay={(date) => openDay(date)}
+      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <details className="w-full rounded-xl border border-stone-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm text-stone-600">
+            {selectedGoalId
+              ? `筛选目标：${targets.find((t) => t.goal.id === selectedGoalId)?.goal.title ?? "已选目标"}`
+              : "按目标查看 / 取消审计"}
+          </summary>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = new FormData(e.currentTarget);
+              router.push(
+                href({
+                  goalId: String(f.get("goalId") ?? ""),
+                  includeCancelled: f.get("includeCancelled") === "on",
+                }),
+              );
+            }}
+            className="mt-4 flex flex-wrap items-end gap-4"
+          >
+            <div className="min-w-0 flex-1">
+              <label htmlFor="history-goal-filter" className="block text-sm">
+                目标
+              </label>
+              <HistorySelect
+                id="history-goal-filter"
+                name="goalId"
+                value={goalId}
+                onValueChange={setGoalId}
+                options={[
+                  { value: "", label: "全部目标" },
+                  ...targets.map((t) => ({
+                    value: t.goal.id,
+                    label: `${t.goal.title} (${goalStatusLabel[t.goal.status]})`,
+                  })),
+                ]}
+              />
+            </div>
+            <label className="flex h-10 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="includeCancelled"
+                defaultChecked={includeCancelled}
+              />
+              含已取消
+            </label>
+            <Button type="submit" variant="outline">
+              应用
+            </Button>
+          </form>
+        </details>
+      </div>
+      {pending && (
+        <p role="status" className="text-sm text-stone-500">
+          正在读取记录…
+        </p>
+      )}
+      {error && (
+        <p
+          role="alert"
+          className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          {error}
+        </p>
+      )}
+      {all.byGoal.length > 0 && (
+        <details className="rounded-xl border border-stone-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            目标投入
+          </summary>
+          <ul className="mt-4 space-y-4">
+            {all.byGoal.map((g) => (
+              <li key={g.goalId}>
+                <div className="flex items-start justify-between gap-3 text-sm">
+                  <span className="min-w-0 break-words">{g.title}</span>
+                  <span className="shrink-0">
+                    {durationLabel(g.focusSeconds)}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-stone-500">
+                  {g.sessionCount} 次执行 · {g.completedTaskCount} 件完成事项
+                </p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {targets.length === 0 ? (
+        <section className="rounded-2xl border border-dashed p-8 text-center">
+          <p className="text-stone-600">从一个想推进的目标开始。</p>
+          <Link
+            href="/onboarding"
+            className="mt-3 inline-block text-sm underline"
+          >
+            建立目标
+          </Link>
+        </section>
+      ) : (
+        <div className="grid gap-8 lg:grid-cols-[1.6fr_1fr]">
+          <section aria-label="最近执行">
+            <h2 className="mb-5 text-lg font-semibold">最近执行</h2>
+            {page.items.length ? (
+              <SessionList
+                sessions={page.items}
+                timezone={timezone}
+                onOpen={openRecord}
+              />
+            ) : (
+              <div className="rounded-xl border border-dashed p-6 text-sm leading-6 text-stone-500">
+                <p>还没有执行记录。先投入一小段时间，足迹就会留在这里。</p>
+                <Link href="/today" className="mt-3 inline-block underline">
+                  回到执行
+                </Link>
+              </div>
+            )}
+            {page.nextCursor && (
+              <Link
+                href={href({ cursor: page.nextCursor })}
+                className="mt-5 inline-block text-sm underline"
+              >
+                加载更早的执行记录
+              </Link>
+            )}
+          </section>
+          <section aria-label="完成事项">
+            <h2 className="mb-5 text-lg font-semibold">完成事项</h2>
+            <p className="mb-4 text-xs leading-5 text-stone-500">
+              任务完成与执行次数分别记录。重新打开的任务不再计入完成事项。
+            </p>
+            {completed.items.length ? (
+              <CompletedList items={completed.items} timezone={timezone} />
+            ) : (
+              <p className="text-sm text-stone-400">还没有已完成的任务。</p>
+            )}
+            {completed.nextCursor && (
+              <Link
+                href={href({ taskCursor: completed.nextCursor })}
+                className="mt-5 inline-block text-sm underline"
+              >
+                更早的完成事项
+              </Link>
+            )}
+          </section>
+        </div>
+      )}
+      <p className="text-xs text-stone-400">
+        按 {timezone} 计算 · 暂停、休息、到时等待与取消记录不计入投入
+      </p>
+      {day && !detail && !adding && (
+        <Modal
+          labelledBy="day-title"
+          onClose={() => setDay(null)}
+          panelClassName="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl sm:p-7"
+        >
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <h2 id="day-title" className="text-xl font-semibold">
+              {day.date} 的足迹
+            </h2>
+            <Button variant="ghost" onClick={() => setDay(null)}>
+              关闭
+            </Button>
+          </div>
+          <p className="mb-6 text-sm text-stone-600">
+            当天投入 {durationLabel(day.stats.totalFocusSeconds)} ·{" "}
+            {day.stats.sessionCount} 次执行 · {day.stats.completedTaskCount}{" "}
+            件完成事项
+          </p>
+          {day.page.items.length ? (
+            <>
+              <SessionList
+                sessions={day.page.items}
+                timezone={timezone}
+                onOpen={openRecord}
+              />
+              <p className="mt-3 text-xs text-stone-500">
+                记录卡片显示整次执行时长；上方摘要只计算当天投入。
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-stone-500">这一天还没有有效投入。</p>
+          )}
+          {day.page.nextCursor && (
+            <Button
+              variant="outline"
+              disabled={pending}
+              onClick={() => openDay(day.date, day.page.nextCursor!)}
+              className="mt-4"
+            >
+              更多当天记录
+            </Button>
+          )}
+          {day.completed.items.length > 0 && (
+            <section className="mt-7">
+              <h3 className="mb-3 text-sm font-medium">当天完成事项</h3>
+              <CompletedList items={day.completed.items} timezone={timezone} />
+              {day.completed.nextCursor && (
+                <Button
+                  disabled={pending}
+                  variant="outline"
+                  className="mt-3"
+                  onClick={() =>
+                    openDay(day.date, undefined, day.completed.nextCursor!)
+                  }
+                >
+                  更多当天完成事项
+                </Button>
+              )}
+            </section>
+          )}
+          {error && (
+            <p role="alert" className="mt-4 text-sm text-amber-900">
+              {error}
+            </p>
+          )}
+        </Modal>
+      )}
+      {(adding || detail) && (
+        <RecordDialog
+          detail={detail}
+          targets={targets}
+          timezone={timezone}
+          now={new Date(all.serverNow)}
+          onClose={() => {
+            setAdding(false);
+            setDetail(undefined);
+          }}
+        />
+      )}
     </div>
   );
 }

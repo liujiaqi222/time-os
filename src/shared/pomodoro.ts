@@ -47,16 +47,22 @@ export function projectPhases(
     completedFocusCount % 4 === 0
       ? "long_break"
       : "short_break";
+  const roundsExhausted =
+    projected.filter((p) => p.kind === "focus").length >= config.iterations;
   const phaseActions =
-    state === "ended"
+    state === "ended" || completedFocusCount >= config.iterations
       ? []
       : state === "due"
         ? current?.kind === "focus"
           ? ["start_break", "start_next_focus"]
-          : ["start_next_focus"]
+          : roundsExhausted
+            ? []
+            : ["start_next_focus"]
         : [
             state === "paused" ? "resume" : "pause",
-            ...(current?.kind !== "focus" ? ["start_next_focus"] : []),
+            ...(current?.kind !== "focus" && !roundsExhausted
+              ? ["start_next_focus"]
+              : []),
           ];
   return {
     phases: projected,

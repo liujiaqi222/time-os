@@ -56,6 +56,7 @@ async function main() {
         await bootstrap.end();
       }
     }
+    const tsConfigBefore = await readFile("tsconfig.json", "utf8");
     const child = spawn(
       "pnpm",
       [
@@ -80,6 +81,25 @@ async function main() {
       child.on("error", reject);
       child.on("exit", (code) => resolve(code ?? 1));
     });
+    if (kind === "e2e") {
+      // Next adds this run's generated type paths to tsconfig. Remove only
+      // those paths, preserving any other edits made while tests ran.
+      const current = JSON.parse(await readFile("tsconfig.json", "utf8"));
+      current.include = current.include.filter(
+        (entry: string) => !entry.startsWith(`.next-tests/${namespace}/`),
+      );
+      if (
+        JSON.stringify(current) === JSON.stringify(JSON.parse(tsConfigBefore))
+      ) {
+        await writeFile("tsconfig.json", tsConfigBefore);
+      } else {
+        const { format } = await import("prettier");
+        await writeFile(
+          "tsconfig.json",
+          await format(JSON.stringify(current), { parser: "json" }),
+        );
+      }
+    }
   } finally {
     await pool.query(`drop schema if exists "${namespace}" cascade`);
     await pool.query(`drop schema if exists "${namespace}_migrations" cascade`);

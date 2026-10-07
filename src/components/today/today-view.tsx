@@ -50,17 +50,12 @@ export function TodayView({
   } | null>(null);
   const [endCard, setEndCard] = useState<SessionView | null>(null);
   const [completionMoment, setCompletionMoment] = useState(0);
+  const [statsRefreshKey, setStatsRefreshKey] = useState(0);
   const [cancelOpen, setCancelOpen] = useState(false);
 
   // The Session this page believes is running; null when idle/none.
   const runningIdRef = useRef<string | null>(
     initialDashboard.activeSession?.id ?? null,
-  );
-  // The portion of today's total already represented by the dashboard read.
-  // Timer actions return authoritative durations, so success can update the
-  // summary locally instead of blocking on another full dashboard request.
-  const dashboardSessionSecondsRef = useRef(
-    initialDashboard.activeSession?.focusSeconds ?? 0,
   );
   // Set when THIS page ends/cancels so the cross-end detector stays quiet.
   const startKeyRef = useRef<string | null>(null);
@@ -80,12 +75,14 @@ export function TodayView({
       epoch === mutationEpoch.current &&
       busyRef.current === "none"
     ) {
-      dashboardSessionSecondsRef.current =
-        result.data.activeSession?.focusSeconds ?? 0;
       setDashboard(result.data);
     }
     return result.ok ? result.data : null;
   }, []);
+
+  useEffect(() => {
+    if (statsRefreshKey > 0) void refresh();
+  }, [statsRefreshKey, refresh]);
 
   const checkRemoteEnd = useCallback(async (sessionId: string) => {
     const result = await getSessionAction(sessionId);
@@ -198,7 +195,6 @@ export function TodayView({
     }));
     if (result.ok) {
       startKeyRef.current = null;
-      dashboardSessionSecondsRef.current = 0;
       setExecutionHint({
         sessionId: result.data.id,
         hint: dashboard.resumeHint,
@@ -227,7 +223,7 @@ export function TodayView({
     changed: boolean;
   }) => {
     const session = dashboard.activeSession;
-    if (!session || busy !== "none") return;
+    if (!session || busy !== "none") return false;
     setBusy("finish");
     setActionError(null);
     const result = await finishSessionAction({
@@ -245,24 +241,13 @@ export function TodayView({
     if (result.ok) {
       selfEndRef.current = true;
       runningIdRef.current = null;
-      const knownSeconds = dashboardSessionSecondsRef.current;
-      const finalSeconds = result.data.durationSeconds ?? 0;
-      dashboardSessionSecondsRef.current = 0;
       setEndCard(result.data);
       setCompletionMoment((moment) => moment + 1);
+      setStatsRefreshKey((key) => key + 1);
       setDashboard((prev) => ({
         ...prev,
         serverNow: result.data.serverNow,
         activeSession: null,
-        todayStats: {
-          ...prev.todayStats,
-          totalFocusSeconds:
-            prev.todayStats.totalFocusSeconds +
-            Math.max(0, finalSeconds - knownSeconds),
-          sessionCount:
-            prev.todayStats.sessionCount +
-            (knownSeconds === 0 && finalSeconds > 0 ? 1 : 0),
-        },
       }));
     } else {
       // Kept the current info and the retry entry (PRD §6.5); if it ended
@@ -271,6 +256,7 @@ export function TodayView({
       setActionError("结束保存失败：当前信息已保留，可重试。");
     }
     setBusy("none");
+    return result.ok;
   };
 
   const handleCancel = async () => {
@@ -299,23 +285,11 @@ export function TodayView({
       selfEndRef.current = true;
       runningIdRef.current = null;
       setCancelOpen(false);
-      const knownSeconds = dashboardSessionSecondsRef.current;
-      dashboardSessionSecondsRef.current = 0;
+      setStatsRefreshKey((key) => key + 1);
       setDashboard((prev) => ({
         ...prev,
         serverNow: result.data.serverNow,
         activeSession: null,
-        todayStats: {
-          ...prev.todayStats,
-          totalFocusSeconds: Math.max(
-            0,
-            prev.todayStats.totalFocusSeconds - knownSeconds,
-          ),
-          sessionCount: Math.max(
-            0,
-            prev.todayStats.sessionCount - (knownSeconds > 0 ? 1 : 0),
-          ),
-        },
       }));
     } else {
       await refresh();
@@ -545,7 +519,7 @@ export function TodayView({
               onSessionLost={handleSessionLost}
               timerPreferences={dashboard.timerSettings?.timerPreferences}
               onPreferencesSaved={() => void refresh()}
-              onFinishRequested={(payload) => void handleFinish(payload)}
+              onFinishRequested={handleFinish}
               onOpenCancel={() => setCancelOpen(true)}
             />
           ) : selection ? (
