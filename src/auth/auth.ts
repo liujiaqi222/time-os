@@ -15,6 +15,7 @@ import { authDb } from "@/db/client";
 import { env } from "@/env";
 import { OWNER_EMAIL } from "@/auth/constants";
 import { MCP_READ_SCOPE, MCP_WRITE_SCOPE } from "@/auth/scopes";
+import { userNameSchema } from "@/shared/schemas/profile";
 
 export { MCP_READ_SCOPE, MCP_WRITE_SCOPE } from "@/auth/scopes";
 
@@ -59,13 +60,32 @@ export const auth = betterAuth({
             });
           }
 
+          const parsed = userNameSchema.safeParse(user.name);
+          if (!parsed.success) {
+            throw new APIError("BAD_REQUEST", {
+              message: parsed.error.issues[0].message,
+            });
+          }
+
           return {
             data: {
               ...user,
               email: OWNER_EMAIL,
-              name: "Time OS Owner",
+              name: parsed.data,
             },
           };
+        },
+      },
+      update: {
+        before: async (user) => {
+          if (user.name === undefined) return;
+          const parsed = userNameSchema.safeParse(user.name);
+          if (!parsed.success) {
+            throw new APIError("BAD_REQUEST", {
+              message: parsed.error.issues[0].message,
+            });
+          }
+          return { data: { ...user, name: parsed.data } };
         },
       },
     },
