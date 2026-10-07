@@ -6,10 +6,12 @@ vi.mock("@/services", () => ({
     pauseSession: vi.fn(),
     resumeSession: vi.fn(),
     cancelSession: vi.fn(),
+    advanceSession: vi.fn(),
   },
 }));
 
 import { POST } from "@/app/api/session/transition/route";
+import { POST as advance } from "@/app/api/session/advance/route";
 import { readWebSession } from "@/auth/web-session";
 import { sessionService } from "@/services";
 
@@ -57,4 +59,40 @@ it("rejects unsupported operations without mutating", async () => {
   expect((await POST(request("finish"))).status).toBe(400);
   expect(sessionService.pauseSession).not.toHaveBeenCalled();
   expect(sessionService.resumeSession).not.toHaveBeenCalled();
+});
+
+it.each(["start_break", "start_next_focus"] as const)(
+  "dispatches independent %s requests to the shared service",
+  async (action) => {
+    vi.mocked(readWebSession).mockResolvedValue(true);
+    const input = { id, expectedPhaseId: id, action };
+    const response = await advance(
+      new Request("http://localhost:3000/api/session/advance", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost:3000",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(sessionService.advanceSession).toHaveBeenCalledWith(
+      { actor: "web" },
+      input,
+    );
+  },
+);
+it("rejects phase advancement without an expected phase", async () => {
+  vi.mocked(readWebSession).mockResolvedValue(true);
+  expect((await advance(request("start_break"))).status).toBe(400);
+  expect(sessionService.advanceSession).not.toHaveBeenCalled();
+});
+it("rejects unauthenticated and cross-origin phase advancement", async () => {
+  expect(
+    (await advance(request("start_break", "https://other.example"))).status,
+  ).toBe(403);
+  vi.mocked(readWebSession).mockResolvedValue(false);
+  expect((await advance(request("start_break"))).status).toBe(401);
+  expect(sessionService.advanceSession).not.toHaveBeenCalled();
 });

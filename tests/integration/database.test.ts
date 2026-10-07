@@ -1355,6 +1355,50 @@ describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
     const goal = await planningService.createGoal(web, { title: "Pomodoro" });
     return timer.startSession(web, { goalId: goal.id, timerMode: "pomodoro" });
   }
+  it("starts and skips a break in two database roundtrips", async () => {
+    const session = await start();
+    const measured = createSessionService(transitionDatabase, {
+      distractionService,
+      clock: () => now,
+    });
+    step(1500);
+    transitionQueries.length = 0;
+    const before = performance.now();
+    const rest = await measured.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: session.phase!.id,
+      action: "start_break",
+    });
+    console.info(
+      `Start break: ${Math.round(performance.now() - before)}ms, ${transitionQueries.length} statements`,
+    );
+    expect(rest.phase).toMatchObject({
+      kind: "short_break",
+      state: "running",
+      remainingSeconds: 300,
+    });
+    expect(rest.focusSeconds).toBe(1500);
+    expect(transitionQueries).toHaveLength(2);
+    step(30);
+    transitionQueries.length = 0;
+    const skipStarted = performance.now();
+    const next = await measured.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: rest.phase!.id,
+      action: "start_next_focus",
+    });
+    console.info(
+      `Skip break: ${Math.round(performance.now() - skipStarted)}ms, ${transitionQueries.length} statements`,
+    );
+    expect(next.phase).toMatchObject({
+      kind: "focus",
+      state: "running",
+      remainingSeconds: 1500,
+    });
+    expect(next.focusSeconds).toBe(1500);
+    expect(next.intervals).toHaveLength(3);
+    expect(transitionQueries).toHaveLength(2);
+  });
   it("cancels an overdue phase at its deadline without counting waiting time", async () => {
     const session = await start();
     step(7200);

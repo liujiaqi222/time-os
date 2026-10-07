@@ -741,6 +741,69 @@ export function createSessionService(
     return row ? viewFromFastRow(row, now) : null;
   }
 
+  /** Atomically settle and open a phase, then read one fresh response snapshot. */
+  async function fastAdvance(
+    value: SessionAdvanceInput,
+  ): Promise<SessionView | null> {
+    const now = clock();
+    const result = await database.execute<{ id: string }>(sql`
+      with session_lock as materialized (
+        select pg_advisory_xact_lock(hashtext(${"session:" + value.id}))
+      ), locked_session as materialized (
+        select s.* from session_lock join sessions s on s.id = ${value.id}::uuid
+        for update of s
+      ), current_phase as materialized (
+        select p.* from session_phases p join locked_session s on s.id = p.session_id
+        order by p.sequence desc limit 1 for update of p
+      ), target as materialized (
+        select s.* from locked_session s, current_phase p
+        where s.timer_mode = 'pomodoro' and s.status in ('active', 'paused')
+          and s.revision = (select snapshot.revision from sessions snapshot where snapshot.id = s.id)
+          and p.id = ${value.expectedPhaseId}::uuid and p.advance_action is null
+          and (
+            (p.kind = 'focus' and (p.ended_at is not null or p.paused_at is null and p.deadline_at <= ${now}))
+            or (${value.action}::text = 'start_next_focus' and p.kind <> 'focus')
+          )
+      ), next_kind as materialized (
+        select t.*, case when ${value.action}::text = 'start_next_focus' then 'focus'
+          when (t.timer_config->>'longBreakEnabled')::boolean and
+            (select count(*) from session_phases p where p.session_id = t.id and p.kind = 'focus'
+              and (p.complete or p.id = cp.id and cp.paused_at is null and cp.deadline_at <= ${now})) % 4 = 0
+            then 'long_break' else 'short_break' end::focus_phase as kind
+        from target t, current_phase cp
+      ), next_duration as materialized (
+        select t.*, (t.timer_config->>case when kind = 'focus' then 'focusMinutes'
+          when kind = 'long_break' then 'longBreakMinutes' else 'shortBreakMinutes' end)::integer * 60000 as ms
+        from next_kind t
+      ), opened_phase as (
+        insert into session_phases (session_id, kind, sequence, started_at, deadline_at, remaining_ms)
+        select t.id, t.kind, cp.sequence + 1, ${now}, ${now}::timestamptz + t.ms * interval '1 millisecond', t.ms
+        from next_duration t, current_phase cp returning *
+      ), ended_phase as (
+        update session_phases p set
+          ended_at = coalesce(cp.ended_at, least(coalesce(cp.deadline_at, ${now}::timestamptz), ${now}::timestamptz)),
+          remaining_ms = case when cp.ended_at is not null then cp.remaining_ms
+            when cp.paused_at is not null then cp.remaining_ms
+            else greatest(0, extract(epoch from (cp.deadline_at - ${now}::timestamptz)) * 1000)::integer end,
+          complete = cp.complete or (cp.kind = 'focus' and cp.paused_at is null and cp.deadline_at <= ${now}),
+          advance_action = ${value.action}, next_phase_id = np.id
+        from current_phase cp, opened_phase np where p.id = cp.id returning p.id
+      ), closed_intervals as (
+        update focus_intervals fi set ended_at = least(coalesce(fi.deadline_at, ${now}::timestamptz), ${now}::timestamptz), updated_at = ${now}
+        from target t where fi.session_id = t.id and fi.ended_at is null returning fi.id
+      ), opened_interval as (
+        insert into focus_intervals (session_id, phase, phase_id, started_at, deadline_at)
+        select p.session_id, p.kind, p.id, p.started_at, p.deadline_at from opened_phase p returning id
+      ), marker as materialized (
+        select (select count(*) from ended_phase) + (select count(*) from closed_intervals)
+          + (select count(*) from opened_interval) as writes
+      )
+      update sessions s set status = 'active', revision = t.revision + 1, updated_at = ${now}
+      from target t, marker where s.id = t.id returning s.id
+    `);
+    return result.rows[0] ? readView(value.id) : null;
+  }
+
   return {
     async getActiveSession(context) {
       void context;
@@ -930,6 +993,8 @@ export function createSessionService(
     async advanceSession(context, input) {
       void context;
       const value = parsed(sessionAdvanceSchema.safeParse(input));
+      const fast = await fastAdvance(value);
+      if (fast) return fast;
       return database.transaction(async (tx) => {
         await lockScope(tx, `session:${value.id}`);
         const session = await findSessionRow(tx, value.id);

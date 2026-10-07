@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { LoaderCircle, Pause, Play, Square, X } from "lucide-react";
+import {
+  LoaderCircle,
+  Pause,
+  Play,
+  SkipForward,
+  Square,
+  X,
+} from "lucide-react";
 
 import {
-  advanceSessionAction,
   archiveDistractionAction,
   createDistractionAction,
   getSessionAction,
@@ -82,17 +88,40 @@ export function RunPanel({
   const due = display.due;
   const phase = session.phase;
   const rest = phase && phase.kind !== "focus";
-  const colors = phaseColors[phase?.kind ?? "focus"];
-  const planComplete =
-    (session.completedFocusCount ?? 0) >=
-    configOf(session.timerConfig).iterations;
-  const label = rest
-    ? phase.kind === "long_break"
+  const config = configOf(session.timerConfig);
+  // The local deadline may arrive before the next server snapshot.
+  const completedFocusCount =
+    (session.completedFocusCount ?? 0) +
+    (due && phase?.kind === "focus" && !phase.complete ? 1 : 0);
+  const pendingBreak = due && phase?.kind === "focus";
+  const pendingFocus = due && !!rest;
+  const breakKind =
+    config.longBreakEnabled &&
+    completedFocusCount > 0 &&
+    completedFocusCount % 4 === 0
+      ? "long_break"
+      : "short_break";
+  const displayKind = pendingFocus
+    ? "focus"
+    : pendingBreak
+      ? breakKind
+      : (phase?.kind ?? "focus");
+  const colors = phaseColors[displayKind];
+  const clockSeconds = pendingBreak
+    ? (breakKind === "long_break"
+        ? config.longBreakMinutes
+        : config.shortBreakMinutes) * 60
+    : pendingFocus
+      ? config.focusMinutes * 60
+      : display.seconds;
+  const label =
+    displayKind === "long_break"
       ? "长休息"
-      : "短休息"
-    : session.timerMode === "pomodoro"
-      ? "专注"
-      : "正计时";
+      : displayKind === "short_break"
+        ? "休息"
+        : session.timerMode === "pomodoro"
+          ? "专注"
+          : "正计时";
   const [captureMode, setCaptureMode] = useState<CaptureMode>("note");
   const [distractionsReady, setDistractionsReady] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -167,20 +196,21 @@ export function RunPanel({
     setCommandError(null);
     startTransition(async () => {
       try {
-        const result: Result<SessionView> =
-          action === "pause" || action === "resume"
-            ? await (
-                await fetch("/api/session/transition", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ id: session.id, operation: action }),
-                })
-              ).json()
-            : await advanceSessionAction({
-                id: session.id,
-                expectedPhaseId: phase!.id,
-                action,
-              });
+        const advance =
+          action === "start_break" || action === "start_next_focus";
+        const response = await fetch(
+          advance ? "/api/session/advance" : "/api/session/transition",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              advance
+                ? { id: session.id, expectedPhaseId: phase!.id, action }
+                : { id: session.id, operation: action },
+            ),
+          },
+        );
+        const result: Result<SessionView> = await response.json();
         if (result.ok) onSessionUpdated(result.data);
         else {
           setCommandError(
@@ -261,7 +291,7 @@ export function RunPanel({
                 type="button"
                 disabled
                 aria-pressed={session.timerMode === value}
-                className={`rounded-full px-4 py-2 text-sm ${session.timerMode === value ? "bg-white text-[#b54b35] shadow-sm" : "text-stone-600"}`}
+                className={`cursor-not-allowed rounded-full px-4 py-2 text-sm ${session.timerMode === value ? "bg-white text-[#b54b35] shadow-sm" : "text-stone-600"}`}
               >
                 {value === "pomodoro" ? "番茄钟" : "正计时"}
               </button>
@@ -301,28 +331,29 @@ export function RunPanel({
               role="status"
               className={`text-base leading-none font-medium ${colors.text}`}
             >
-              {due ? `${label}已到时` : `${label}${isPaused ? "已暂停" : "中"}`}
+              {pendingBreak || pendingFocus
+                ? label
+                : due
+                  ? `${label}已到时`
+                  : `${label}${isPaused ? "已暂停" : "中"}`}
             </p>
             <FocusClock
               role="timer"
               aria-label={
-                session.timerMode === "pomodoro" ? "本段剩余时间" : "已专注时间"
+                pendingBreak
+                  ? "待开始的休息时长"
+                  : pendingFocus
+                    ? "待开始的专注时长"
+                    : session.timerMode === "pomodoro"
+                      ? "本段剩余时间"
+                      : "已专注时间"
               }
-              value={formatTimeDigits(display.seconds)}
+              value={formatTimeDigits(clockSeconds)}
               tone={isPaused ? "paused" : "running"}
-              className={`${colors.text} ${formatTimeDigits(display.seconds).length > 5 ? "text-[2.6rem] sm:text-[3.75rem]" : "text-[3.75rem] sm:text-[5.25rem]"}`}
+              className={`${colors.text} ${formatTimeDigits(clockSeconds).length > 5 ? "text-[2.6rem] sm:text-[3.75rem]" : "text-[3.75rem] sm:text-[5.25rem]"}`}
             />
           </div>
         </TimerStage>
-        {due && (
-          <p className="mt-4 max-w-sm text-sm leading-6 text-stone-600">
-            {rest
-              ? "准备好了，再开始下一段专注。"
-              : planComplete
-                ? "计划轮次已完成。可以结束保存，也可以再专注一轮。"
-                : "这段投入已记下。休息一下，或继续专注。"}
-          </p>
-        )}
         {commandError && (
           <p role="alert" className="mt-4 text-sm text-red-700">
             {commandError}
@@ -333,16 +364,14 @@ export function RunPanel({
           <div className="mt-7 flex w-full flex-wrap items-center justify-center gap-2">
             {due ? (
               <>
-                {!rest && !planComplete && (
+                {!rest && (
                   <Button
                     size="lg"
                     disabled={busy !== "none"}
                     onClick={() => command("start_break")}
-                    className="h-12 rounded-xl bg-[#d85c41] px-6 text-white hover:bg-[#c84f36]"
+                    className={`h-12 rounded-xl px-6 text-white ${breakKind === "long_break" ? "bg-[#b49350] hover:bg-[#9b7c3f]" : "bg-[#70917b] hover:bg-[#5c7c66]"}`}
                   >
-                    {session.nextBreakKind === "long_break"
-                      ? "开始长休息"
-                      : "开始休息"}
+                    {breakKind === "long_break" ? "开始长休息" : "开始休息"}
                   </Button>
                 )}
                 <Button
@@ -350,13 +379,12 @@ export function RunPanel({
                   variant={rest ? "default" : "outline"}
                   disabled={busy !== "none"}
                   onClick={() => command("start_next_focus")}
-                  className="h-12 rounded-xl px-6"
+                  className={`h-12 rounded-xl px-6 ${rest ? "bg-[#d85c41] text-white hover:bg-[#c84f36]" : ""}`}
                 >
-                  {planComplete
-                    ? "再专注一轮"
-                    : rest
-                      ? "开始下一轮"
-                      : "继续专注"}
+                  {!rest && (
+                    <SkipForward className="size-4" aria-hidden="true" />
+                  )}
+                  {rest ? "开始下一轮" : "跳过休息"}
                 </Button>
               </>
             ) : (
@@ -401,7 +429,8 @@ export function RunPanel({
                     onClick={() => command("start_next_focus")}
                     className="h-12 rounded-xl"
                   >
-                    提前开始下一轮
+                    <SkipForward className="size-4" aria-hidden="true" />
+                    跳过休息
                   </Button>
                 )}
               </>
