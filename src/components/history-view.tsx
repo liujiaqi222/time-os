@@ -20,6 +20,7 @@ import type {
 import type { Statistics } from "@/services/statistics";
 import type { Goal, Task } from "@/db/schema";
 import { durationLabel } from "@/shared/duration-label";
+import { formatHumanDuration } from "@/shared/session-timer";
 import { localDateKey } from "@/shared/timezone";
 import { goalStatusLabel, timeBasisLabel } from "@/shared/labels";
 
@@ -238,7 +239,7 @@ export function HistoryView({
       >
         <Stat
           label="累计投入"
-          value={durationLabel(all.totalFocusSeconds, "minutes")}
+          value={formatHumanDuration(all.totalFocusSeconds)}
         />
         <Stat label="本周投入" value={durationLabel(week.totalFocusSeconds)} />
         <Stat label="累计有效执行" value={`${all.sessionCount} 次`} />

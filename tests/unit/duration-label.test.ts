@@ -1,8 +1,9 @@
 import { expect, it } from "vitest";
 import { durationLabel } from "@/shared/duration-label";
-it("shows cumulative effort through whole minutes without changing precise record labels", () => {
-  expect(durationLabel(59, "minutes")).toBe("0 分钟");
-  expect(durationLabel(125, "minutes")).toBe("2 分钟");
-  expect(durationLabel(3665, "minutes")).toBe("1 小时 1 分钟");
+import { formatHumanDuration } from "@/shared/session-timer";
+it("uses existing summary precision while retaining precise record labels", () => {
+  expect(formatHumanDuration(59)).toBe("59秒");
+  expect(formatHumanDuration(125)).toBe("2分 5秒");
+  expect(formatHumanDuration(3665)).toBe("1时 1分");
   expect(durationLabel(125)).toBe("2 分钟 5 秒");
 });
