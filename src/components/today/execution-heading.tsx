@@ -61,8 +61,11 @@ export function ExecutionHeading({
                       />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    {value} · 执行中不可切换{label}，请先结束或取消本次执行。
+                  <TooltipContent className="flex flex-col items-start gap-0.5 text-left">
+                    <span className="text-background font-medium">{value}</span>
+                    <span className="text-background/80 text-[11px] leading-relaxed">
+                      执行中不可切换{label}，请先结束或取消本次执行。
+                    </span>
                   </TooltipContent>
                 </Tooltip>
               </div>

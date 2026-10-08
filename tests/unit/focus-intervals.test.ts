@@ -111,7 +111,7 @@ describe("focusSecondsInRange", () => {
     };
     // Half the wall time falls inside the day → half the duration, and
     // never more than the declared total.
-    expect(focusSecondsInRange(capped, range, now)).toBe(hours(5));
+    expect(focusSecondsInRange(capped, range, range.end)).toBe(hours(5));
   });
 
   it("returns zero for cancelled Sessions and out-of-range records", () => {
@@ -188,4 +188,80 @@ describe("computeFocusTotals", () => {
     expect(totals.goalFocusSeconds.get("g1")).toBe(hours(1) + 30 * 60);
     expect(totals.goalFocusSeconds.get("g2")).toBe(10 * 60);
   });
+});
+
+it("conserves odd corrected seconds across daily boundaries", () => {
+  const s: SessionFocusSlice = {
+    id: "odd",
+    goalId: "g",
+    status: "completed",
+    timeBasis: "corrected",
+    startedAt: "2026-01-01T23:30:00Z",
+    endedAt: "2026-01-02T00:30:00Z",
+    durationSeconds: 1801,
+    intervals: [],
+  };
+  const now = new Date("2026-01-03T00:00:00Z");
+  const before = {
+    start: new Date("2026-01-01T00:00:00Z"),
+    end: new Date("2026-01-02T00:00:00Z"),
+  };
+  const after = { start: before.end, end: now };
+  expect(focusSecondsInRange(s, before, now)).toBe(900);
+  expect(focusSecondsInRange(s, after, now)).toBe(901);
+});
+it("conserves fractional observed seconds over a midnight split", () => {
+  const s: SessionFocusSlice = {
+    id: "odd",
+    goalId: "g",
+    status: "completed",
+    timeBasis: "observed",
+    startedAt: "2026-01-01T23:59:59.500Z",
+    endedAt: "2026-01-02T00:00:00.700Z",
+    durationSeconds: 1,
+    intervals: [
+      {
+        phase: "focus",
+        startedAt: "2026-01-01T23:59:59.500Z",
+        endedAt: "2026-01-02T00:00:00.700Z",
+      },
+    ],
+  };
+  const now = new Date("2026-01-03T00:00:00Z");
+  expect(
+    focusSecondsInRange(
+      s,
+      {
+        start: new Date("2026-01-01T00:00:00Z"),
+        end: new Date("2026-01-02T00:00:00Z"),
+      },
+      now,
+    ),
+  ).toBe(0);
+  expect(
+    focusSecondsInRange(
+      s,
+      { start: new Date("2026-01-02T00:00:00Z"), end: now },
+      now,
+    ),
+  ).toBe(1);
+});
+it("never invents observed time from a row with no intervals", () => {
+  const s: SessionFocusSlice = {
+    id: "empty",
+    goalId: "g",
+    status: "completed",
+    timeBasis: "observed",
+    startedAt: "2026-01-01T00:00:00Z",
+    endedAt: "2026-01-01T01:00:00Z",
+    durationSeconds: 3600,
+    intervals: [],
+  };
+  expect(
+    focusSecondsInRange(
+      s,
+      { start: new Date(s.startedAt), end: new Date(s.endedAt!) },
+      new Date("2026-01-02"),
+    ),
+  ).toBe(0);
 });

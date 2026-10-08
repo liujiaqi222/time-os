@@ -1017,17 +1017,20 @@ describe("history service and statistics", () => {
     await expect(
       historyService.updateSession(web, {
         id: first.id,
+        expectedRevision: first.revision,
         goalId: other.goal.id,
         taskId: tasks[0]!.id,
       }),
     ).rejects.toMatchObject({ code: "TASK_NOT_IN_GOAL" });
     const corrected = await historyService.updateSession(web, {
       id: first.id,
+      expectedRevision: first.revision,
       goalId: other.goal.id,
       taskId: null,
       startedAt: "2026-06-01T09:00:00.000Z",
       endedAt: "2026-06-01T10:00:00.000Z",
       note: "Corrected",
+      expectedNoteVersion: first.noteVersion,
     });
     expect(corrected).toMatchObject({
       timeBasis: "corrected",
@@ -1129,6 +1132,7 @@ describe("history service and statistics", () => {
     // the original intervals stay, the declared value wins.
     await historyService.updateSession(web, {
       id: observedId,
+      expectedRevision: 0,
       durationSeconds: 1800,
     });
     const corrected = await statisticsService.getStatistics(web, {
@@ -1341,7 +1345,7 @@ describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
   const step = (seconds: number) => {
     now = new Date(now.getTime() + seconds * 1000);
   };
-  async function start() {
+  async function start(iterations = 4) {
     now = new Date("2026-10-01T00:00:00Z");
     await settingsService.update(web, {
       timerPreferences: {
@@ -1350,11 +1354,56 @@ describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
         longBreakMinutes: 15,
         longBreakEnabled: true,
         soundEnabled: false,
+        iterations,
       },
     });
     const goal = await planningService.createGoal(web, { title: "Pomodoro" });
     return timer.startSession(web, { goalId: goal.id, timerMode: "pomodoro" });
   }
+  it("starts and skips a break in two database roundtrips", async () => {
+    const session = await start();
+    const measured = createSessionService(transitionDatabase, {
+      distractionService,
+      clock: () => now,
+    });
+    step(1500);
+    transitionQueries.length = 0;
+    const before = performance.now();
+    const rest = await measured.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: session.phase!.id,
+      action: "start_break",
+    });
+    console.info(
+      `Start break: ${Math.round(performance.now() - before)}ms, ${transitionQueries.length} statements`,
+    );
+    expect(rest.phase).toMatchObject({
+      kind: "short_break",
+      state: "running",
+      remainingSeconds: 300,
+    });
+    expect(rest.focusSeconds).toBe(1500);
+    expect(transitionQueries).toHaveLength(2);
+    step(30);
+    transitionQueries.length = 0;
+    const skipStarted = performance.now();
+    const next = await measured.advanceSession(web, {
+      id: session.id,
+      expectedPhaseId: rest.phase!.id,
+      action: "start_next_focus",
+    });
+    console.info(
+      `Skip break: ${Math.round(performance.now() - skipStarted)}ms, ${transitionQueries.length} statements`,
+    );
+    expect(next.phase).toMatchObject({
+      kind: "focus",
+      state: "running",
+      remainingSeconds: 1500,
+    });
+    expect(next.focusSeconds).toBe(1500);
+    expect(next.intervals).toHaveLength(3);
+    expect(transitionQueries).toHaveLength(2);
+  });
   it("cancels an overdue phase at its deadline without counting waiting time", async () => {
     const session = await start();
     step(7200);
@@ -1486,7 +1535,7 @@ describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
     expect(subsequent.phase?.remainingSeconds).toBe(3000);
   });
   it("offers fourth-round long break once; skipping it makes the fifth break short", async () => {
-    let session = await start();
+    let session = await start(6);
     for (let round = 1; round <= 5; round++) {
       step(1500);
       const read = await timer.getSession(mcp, session.id);
@@ -1512,6 +1561,48 @@ describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
       7500,
     );
   });
+  it.each([1, 4, 5])(
+    "enforces %i rounds across Web/MCP and refuses a trailing break",
+    async (iterations) => {
+      let session = await start(iterations);
+      for (let round = 1; round <= iterations; round++) {
+        step(1500);
+        if (round < iterations)
+          session = await timer.advanceSession(web, {
+            id: session.id,
+            expectedPhaseId: session.phase!.id,
+            action: "start_next_focus",
+          });
+      }
+      const read = await timer.getSession(mcp, session.id);
+      expect(read.completedFocusCount).toBe(iterations);
+      expect(read.actions).not.toContain("start_break");
+      expect(read.actions).not.toContain("start_next_focus");
+      const attempts = await Promise.allSettled([
+        timer.advanceSession(web, {
+          id: session.id,
+          expectedPhaseId: read.phase!.id,
+          action: "start_break",
+        }),
+        timer.advanceSession(mcp, {
+          id: session.id,
+          expectedPhaseId: read.phase!.id,
+          action: "start_next_focus",
+        }),
+      ]);
+      for (const attempt of attempts) {
+        expect(attempt.status).toBe("rejected");
+        if (attempt.status === "rejected")
+          expect(attempt.reason.code).toBe("INVALID_SESSION_STATE");
+      }
+      expect((await timer.getSession(web, session.id)).phases).toHaveLength(
+        iterations,
+      );
+      const finished = await timer.finishSession(web, session.id);
+      expect(finished.status).toBe("completed");
+      expect(finished.durationSeconds).toBe(iterations * 1500);
+    },
+  );
   it("competing advance actions form one phase, and old phase cannot touch the new one", async () => {
     const session = await start();
     step(1500);
@@ -1685,5 +1776,549 @@ describe("T08 pomodoro deadlines, concurrency and shared contracts", () => {
     });
     expect(first.totalFocusSeconds).toBe(300);
     expect(second.totalFocusSeconds).toBe(1200);
+  });
+});
+
+describe("T09 footprints", () => {
+  const web = { actor: "web" } as const;
+  const mcp = { actor: "mcp" } as const;
+  const now = "2026-06-03T12:00:00.000Z";
+  async function goal(title = "T09") {
+    return planningService.createGoal(web, { title });
+  }
+  async function observed(
+    goalId: string,
+    start: string,
+    end: string | null,
+    intervals: {
+      start: string;
+      end: string | null;
+      phase?: string;
+      deadline?: string;
+    }[],
+    status = "completed",
+  ) {
+    const id = randomUUID();
+    await pool.query(
+      `insert into sessions(id,goal_id,status,entry_mode,created_via,timer_mode,time_basis,started_at,ended_at,duration_seconds) values($1,$2,$3,'timer','web','pomodoro','observed',$4,$5,0)`,
+      [id, goalId, status, start, end],
+    );
+    for (const i of intervals)
+      await pool.query(
+        `insert into focus_intervals(session_id,phase,started_at,ended_at,deadline_at) values($1,$2,$3,$4,$5)`,
+        [id, i.phase ?? "focus", i.start, i.end, i.deadline ?? null],
+      );
+    return id;
+  }
+  const query = {
+    period: "custom" as const,
+    from: "2026-06-01",
+    to: "2026-06-03",
+    now,
+    daily: true,
+  };
+  it("splits cross-midnight focus at real pauses; day listing finds an earlier start", async () => {
+    await settingsService.update(web, { timezone: "UTC" });
+    const g = await goal();
+    const id = await observed(
+      g.id,
+      "2026-06-01T23:50:00Z",
+      "2026-06-02T00:10:00Z",
+      [
+        { start: "2026-06-01T23:50:00Z", end: "2026-06-01T23:55:00Z" },
+        { start: "2026-06-02T00:05:00Z", end: "2026-06-02T00:10:00Z" },
+      ],
+    );
+    const stats = await statisticsService.getStatistics(web, query);
+    expect(stats.totalFocusSeconds).toBe(600);
+    expect(stats.sessionCount).toBe(1);
+    expect(stats.daily.map((d) => [d.focusSeconds, d.sessionCount])).toEqual([
+      [300, 1],
+      [300, 1],
+    ]);
+    const list = await historyService.listSessions(mcp, {
+      dateMode: "focus",
+      from: "2026-06-02T00:00:00Z",
+      to: "2026-06-03T00:00:00Z",
+      now,
+    });
+    expect(list.items.map((s) => s.id)).toEqual([id]);
+    expect(
+      (
+        await historyService.listSessions(web, {
+          from: "2026-06-02T00:00:00Z",
+          to: "2026-06-03T00:00:00Z",
+        })
+      ).items,
+    ).toHaveLength(0);
+  });
+  it("conserves corrected integer seconds, retains original intervals and excludes cancelled contribution", async () => {
+    await settingsService.update(web, { timezone: "UTC" });
+    const g = await goal();
+    const id = await observed(
+      g.id,
+      "2026-06-01T23:30:00Z",
+      "2026-06-02T00:30:00Z",
+      [{ start: "2026-06-01T23:30:00Z", end: "2026-06-02T00:30:00Z" }],
+    );
+    await historyService.updateSession(web, {
+      id,
+      expectedRevision: 0,
+      durationSeconds: 1801,
+    });
+    const stats = await statisticsService.getStatistics(web, query);
+    expect(stats.daily.map((d) => d.focusSeconds)).toEqual([900, 901]);
+    expect(stats.totalFocusSeconds).toBe(1801);
+    expect(stats.byGoal[0]?.focusSeconds).toBe(1801);
+    expect((await historyService.getSession(web, id)).intervals).toHaveLength(
+      1,
+    );
+    const details = await sessionService.getSession(mcp, id);
+    expect(details.focusSeconds).toBe(1801);
+    await sessionService.cancelSession(web, id);
+    expect(
+      (await statisticsService.getStatistics(web, query)).totalFocusSeconds,
+    ).toBe(0);
+  });
+  it("counts pomodoro focus once and clips open intervals to both deadline and now", async () => {
+    await settingsService.update(web, { timezone: "UTC" });
+    const g = await goal();
+    await observed(
+      g.id,
+      "2026-06-01T10:00:00Z",
+      null,
+      [
+        { start: "2026-06-01T10:00:00Z", end: "2026-06-01T10:25:00Z" },
+        {
+          start: "2026-06-01T10:25:00Z",
+          end: "2026-06-01T10:30:00Z",
+          phase: "short_break",
+        },
+        {
+          start: "2026-06-01T10:30:00Z",
+          end: null,
+          deadline: "2026-06-01T10:40:00Z",
+        },
+      ],
+      "active",
+    );
+    const due = await statisticsService.getStatistics(web, {
+      ...query,
+      now: "2026-06-01T11:00:00Z",
+    });
+    expect(due.totalFocusSeconds).toBe(2100);
+    expect(due.sessionCount).toBe(1);
+    const live = await statisticsService.getStatistics(web, {
+      ...query,
+      now: "2026-06-01T10:35:00Z",
+    });
+    expect(live.totalFocusSeconds).toBe(1800);
+  });
+  it("goal filters include currently completed Tasks; reopening and cancellation do not double-count", async () => {
+    await settingsService.update(web, { timezone: "UTC" });
+    const g = await goal();
+    const other = await goal("other");
+    const [t] = await planningService.createTasks(web, {
+      goalId: g.id,
+      tasks: [{ title: "Complete me" }],
+    });
+    await pool.query(
+      `update tasks set status='completed',completed_at='2026-06-01T10:00:00Z' where id=$1`,
+      [t!.id],
+    );
+    for (let i = 0; i < 3; i++)
+      await historyService.logSession(web, {
+        goalId: g.id,
+        taskId: t!.id,
+        durationSeconds: 60,
+        endedAt: `2026-06-01T1${i}:00:00Z`,
+      });
+    await historyService.logSession(web, {
+      goalId: other.id,
+      durationSeconds: 600,
+      endedAt: "2026-06-01T15:00:00Z",
+    });
+    const stats = await statisticsService.getStatistics(web, {
+      ...query,
+      goalId: g.id,
+    });
+    expect(stats.totalFocusSeconds).toBe(180);
+    expect(stats.sessionCount).toBe(3);
+    expect(stats.completedTaskCount).toBe(1);
+    expect(stats.byGoal).toHaveLength(1);
+    expect(
+      (await historyService.listCompletedTasks(web, { goalId: g.id })).items,
+    ).toHaveLength(1);
+    const first = (await historyService.listSessions(web, { goalId: g.id }))
+      .items[0]!;
+    await sessionService.cancelSession(web, first.id);
+    expect(
+      (await statisticsService.getStatistics(web, { ...query, goalId: g.id }))
+        .completedTaskCount,
+    ).toBe(1);
+    await planningService.reopenTask(web, t!.id);
+    expect(
+      (await statisticsService.getStatistics(web, { ...query, goalId: g.id }))
+        .completedTaskCount,
+    ).toBe(0);
+  });
+  it("text-only edits keep observed time and bypass pre-existing overlaps; revisions reject concurrent corrections", async () => {
+    const g = await goal();
+    const id = await observed(
+      g.id,
+      "2026-06-01T10:00:00Z",
+      "2026-06-01T11:00:00Z",
+      [{ start: "2026-06-01T10:00:00Z", end: "2026-06-01T11:00:00Z" }],
+    );
+    await historyService.logSession(web, {
+      goalId: g.id,
+      durationSeconds: 60,
+      endedAt: "2026-06-01T10:30:00Z",
+      allowOverlap: true,
+    });
+    const updated = await historyService.updateSession(web, {
+      id,
+      expectedRevision: 0,
+      note: "Text only",
+      expectedNoteVersion: 0,
+      resumeHint: "Next",
+      expectedResumeHintVersion: 0,
+    });
+    expect(updated.timeBasis).toBe("observed");
+    await expect(
+      historyService.updateSession(mcp, {
+        id,
+        expectedRevision: 0,
+        durationSeconds: 1800,
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    await expect(
+      historyService.updateSession(mcp, {
+        id,
+        expectedRevision: updated.revision,
+        durationSeconds: 1800,
+      }),
+    ).rejects.toMatchObject({ code: "SESSION_TIME_OVERLAP" });
+    await historyService.updateSession(mcp, {
+      id,
+      expectedRevision: updated.revision,
+      durationSeconds: 1800,
+      allowOverlap: true,
+    });
+  });
+  it("concurrent logs with one idempotency key insert one record even after overlap confirmation", async () => {
+    const g = await goal();
+    const input = {
+      goalId: g.id,
+      durationSeconds: 60,
+      endedAt: "2026-06-01T10:00:00Z",
+      allowOverlap: true,
+      idempotencyKey: randomUUID(),
+    };
+    const [a, b] = await Promise.all([
+      historyService.logSession(web, input),
+      historyService.logSession(mcp, input),
+    ]);
+    expect(a.id).toBe(b.id);
+    expect((await historyService.listSessions(web, {})).items).toHaveLength(1);
+  });
+  it("DST and timezone changes recompute local days without modifying raw intervals", async () => {
+    const g = await goal();
+    const id = await observed(
+      g.id,
+      "2026-03-08T05:00:00Z",
+      "2026-03-09T04:00:00Z",
+      [{ start: "2026-03-08T05:00:00Z", end: "2026-03-09T04:00:00Z" }],
+    );
+    await settingsService.update(web, { timezone: "America/New_York" });
+    const dst = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-03-08",
+      to: "2026-03-09",
+      now,
+      daily: true,
+    });
+    expect(dst.totalFocusSeconds).toBe(23 * 3600);
+    expect(dst.daily).toHaveLength(1);
+    await settingsService.update(web, { timezone: "UTC" });
+    const utc = await statisticsService.getStatistics(web, {
+      period: "custom",
+      from: "2026-03-08",
+      to: "2026-03-10",
+      now,
+      daily: true,
+    });
+    expect(utc.daily.map((d) => d.focusSeconds)).toEqual([19 * 3600, 4 * 3600]);
+    expect(
+      (
+        await historyService.getSession(web, id)
+      ).intervals[0]?.startedAt.toISOString(),
+    ).toBe("2026-03-08T05:00:00.000Z");
+  });
+  it("stable cursor pagination visits tied starts once; calendar queries validate required bounds", async () => {
+    const g = await goal();
+    for (let i = 0; i < 4; i++)
+      await historyService.logSession(web, {
+        goalId: g.id,
+        durationSeconds: 60,
+        endedAt: "2026-06-01T10:00:00Z",
+        allowOverlap: true,
+      });
+    const a = await historyService.listSessions(web, { limit: 2 });
+    const b = await historyService.listSessions(web, {
+      limit: 2,
+      cursor: a.nextCursor!,
+    });
+    expect(new Set([...a.items, ...b.items].map((s) => s.id)).size).toBe(4);
+    expect(b.nextCursor).toBeNull();
+    await expect(
+      historyService.listSessions(web, { dateMode: "focus" }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      statisticsService.getStatistics(web, {
+        period: "custom",
+        from: "2025-01-01",
+        to: "2027-01-01",
+        daily: true,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      statisticsService.getStatistics(web, { period: "all", daily: true }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+  it("continuous focus contributes ten minutes on each day and preserves archived Goal history", async () => {
+    await settingsService.update(web, { timezone: "UTC" });
+    const g = await goal();
+    const id = await observed(
+      g.id,
+      "2026-06-01T23:50:00Z",
+      "2026-06-02T00:10:00Z",
+      [{ start: "2026-06-01T23:50:00Z", end: "2026-06-02T00:10:00Z" }],
+    );
+    await observed(g.id, "2026-06-02T02:00:00Z", "2026-06-02T02:00:00Z", []);
+    await planningService.updateGoal(web, { id: g.id, status: "archived" });
+    const stats = await statisticsService.getStatistics(web, query);
+    expect(stats.daily.map((d) => [d.focusSeconds, d.sessionCount])).toEqual([
+      [600, 1],
+      [600, 1],
+    ]);
+    expect(stats.sessionCount).toBe(1);
+    expect(stats.byGoal[0]?.status).toBe("archived");
+    const details = await historyService.getSession(web, id);
+    const other = await goal("another");
+    await expect(
+      historyService.updateSession(web, {
+        id,
+        goalId: other.id,
+        expectedRevision: details.revision,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await historyService.updateSession(web, {
+      id,
+      goalId: other.id,
+      taskId: null,
+      expectedRevision: details.revision,
+    });
+    expect(
+      (await statisticsService.getStatistics(web, { ...query, goalId: g.id }))
+        .totalFocusSeconds,
+    ).toBe(0);
+  });
+  it("fractional observed intervals conserve integer seconds and a configured week start changes only the read", async () => {
+    await settingsService.update(web, { timezone: "UTC", weekStartsOn: 1 });
+    const g = await goal();
+    await observed(
+      g.id,
+      "2026-06-01T23:59:59.500Z",
+      "2026-06-02T00:00:00.700Z",
+      [{ start: "2026-06-01T23:59:59.500Z", end: "2026-06-02T00:00:00.700Z" }],
+    );
+    const stats = await statisticsService.getStatistics(web, query);
+    expect(stats.totalFocusSeconds).toBe(1);
+    expect(stats.daily.map((d) => d.focusSeconds)).toEqual([0, 1]);
+    const monday = await statisticsService.getStatistics(web, {
+      period: "week",
+      now: "2026-06-07T12:00:00Z",
+    });
+    expect(monday.totalFocusSeconds).toBe(1);
+    await settingsService.update(web, { weekStartsOn: 0 });
+    const sunday = await statisticsService.getStatistics(web, {
+      period: "week",
+      now: "2026-06-07T12:00:00Z",
+    });
+    expect(sunday.totalFocusSeconds).toBe(0);
+  });
+  it("note and hint versions stay independent while time corrections require the record revision", async () => {
+    const g = await goal();
+    const log = await historyService.logSession(web, {
+      goalId: g.id,
+      durationSeconds: 60,
+      endedAt: "2026-06-01T10:00:00Z",
+    });
+    await historyService.updateSession(web, {
+      id: log.id,
+      resumeHint: "A hint",
+      expectedResumeHintVersion: 0,
+    });
+    const note = await historyService.updateSession(mcp, {
+      id: log.id,
+      note: "A note",
+      expectedNoteVersion: 0,
+      expectedRevision: 0,
+    });
+    expect(note).toMatchObject({
+      noteVersion: 1,
+      resumeHintVersion: 1,
+      timeBasis: "manual",
+    });
+    await expect(
+      historyService.updateSession(web, {
+        id: log.id,
+        note: "Stale",
+        expectedNoteVersion: 0,
+      }),
+    ).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    await expect(
+      historyService.updateSession(web, { id: log.id, durationSeconds: 30 }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+  it("pagination keeps the boundary bookmark after a correction or completed Task reopening", async () => {
+    const g = await goal();
+    for (let i = 0; i < 3; i++)
+      await historyService.logSession(web, {
+        goalId: g.id,
+        durationSeconds: 60,
+        endedAt: "2026-06-01T10:00:00Z",
+        allowOverlap: true,
+      });
+    const first = await historyService.listSessions(web, { limit: 1 });
+    const boundary = first.items[0]!;
+    await historyService.updateSession(web, {
+      id: boundary.id,
+      expectedRevision: boundary.revision,
+      startedAt: "2026-06-01T08:00:00Z",
+      endedAt: "2026-06-01T08:01:00Z",
+    });
+    const remaining = await historyService.listSessions(web, {
+      limit: 100,
+      cursor: first.nextCursor!,
+    });
+    expect(remaining.items).toHaveLength(2);
+    expect(remaining.items.map((s) => s.id)).not.toContain(boundary.id);
+    const t = await planningService.createTasks(web, {
+      goalId: g.id,
+      tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+    });
+    for (const task of t)
+      await pool.query(
+        "update tasks set status='completed',completed_at='2026-06-01T11:00:00Z' where id=$1",
+        [task.id],
+      );
+    const completed = await historyService.listCompletedTasks(web, {
+      limit: 1,
+    });
+    await planningService.reopenTask(web, completed.items[0]!.id);
+    expect(
+      (
+        await historyService.listCompletedTasks(web, {
+          cursor: completed.nextCursor!,
+          limit: 100,
+        })
+      ).items,
+    ).toHaveLength(2);
+  });
+  it("explicit timezone and week-start snapshots remain coherent after preferences change", async () => {
+    await settingsService.update(web, { timezone: "UTC", weekStartsOn: 1 });
+    const g = await goal();
+    await historyService.logSession(web, {
+      goalId: g.id,
+      durationSeconds: 3600,
+      endedAt: "2026-06-01T23:00:00Z",
+    });
+    const input = { ...query, timezone: "UTC", weekStartsOn: 1 };
+    const before = await statisticsService.getStatistics(web, input);
+    await settingsService.update(web, {
+      timezone: "Asia/Shanghai",
+      weekStartsOn: 0,
+    });
+    expect(await statisticsService.getStatistics(mcp, input)).toEqual(before);
+    expect(
+      (await statisticsService.getStatistics(web, query)).daily[1]
+        ?.focusSeconds,
+    ).toBe(3600);
+  });
+  it("year-view returns 365 bounded day rows with a fixed query count and matching web/MCP results", async () => {
+    await settingsService.update(web, { timezone: "UTC" });
+    const g = await goal();
+    await pool.query(
+      `insert into sessions(goal_id,status,entry_mode,created_via,timer_mode,time_basis,started_at,ended_at,duration_seconds)
+      select $1,'completed','manual','web','stopwatch','manual',d,d+interval '25 minutes',1500 from generate_series('2025-06-01'::timestamptz,'2026-05-31'::timestamptz,interval '1 day') d`,
+      [g.id],
+    );
+    // Mixed source data: every day also has cross-midnight focus,
+    // a rest interval and another focus interval in the same Session.
+    await pool.query(
+      `with inserted as (
+      insert into sessions(goal_id,status,entry_mode,created_via,timer_mode,time_basis,started_at,ended_at,duration_seconds)
+      select $1,'completed','timer','mcp','pomodoro','observed',d+interval '23 hours 50 minutes',d+interval '24 hours 10 minutes',600
+      from generate_series('2025-06-01'::timestamptz,'2026-05-31'::timestamptz,interval '1 day') d returning id,started_at
+    ) insert into focus_intervals(session_id,phase,started_at,ended_at)
+      select id,'focus'::focus_phase,started_at,started_at+interval '5 minutes' from inserted
+      union all select id,'short_break'::focus_phase,started_at+interval '5 minutes',started_at+interval '15 minutes' from inserted
+      union all select id,'focus'::focus_phase,started_at+interval '15 minutes',started_at+interval '20 minutes' from inserted`,
+      [g.id],
+    );
+    const queries: string[] = [];
+    const measuredDb = drizzle(pool, {
+      schema,
+      logger: {
+        logQuery(q) {
+          queries.push(q);
+        },
+      },
+    });
+    const measured = createStatisticsService(measuredDb, {
+      settingsService: createSettingsService(measuredDb),
+    });
+    const input = {
+      period: "custom" as const,
+      from: "2025-06-01",
+      to: "2026-06-01",
+      now,
+      daily: true,
+      goalId: g.id,
+    };
+    const start = performance.now();
+    const stats = await measured.getStatistics(web, input);
+    const elapsedMs = Math.round(performance.now() - start);
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(".test-data", { recursive: true });
+    await writeFile(
+      ".test-data/t09-performance.json",
+      JSON.stringify(
+        {
+          sessions: 730,
+          focusIntervals: 1095,
+          days: 365,
+          queries: queries.length,
+          elapsedMs,
+          focusSeconds: stats.totalFocusSeconds,
+        },
+        null,
+        2,
+      ),
+    );
+    expect(queries).toHaveLength(2);
+    expect(stats.daily).toHaveLength(365);
+    expect(stats.totalFocusSeconds).toBe(365 * 1500 + 365 * 600 - 300);
+    expect(stats.sessionCount).toBe(730);
+    expect(await statisticsService.getStatistics(mcp, input)).toEqual(stats);
+    const all = await statisticsService.getStatistics(web, {
+      period: "all",
+      now,
+      goalId: g.id,
+    });
+    expect(all.totalFocusSeconds).toBe(stats.totalFocusSeconds + 300);
+    expect(all.daily).toEqual([]);
   });
 });

@@ -35,16 +35,6 @@ export interface FocusTotals {
   goalFocusSeconds: ReadonlyMap<string, number>;
 }
 
-function overlapSeconds(
-  startMs: number,
-  endMs: number,
-  range: { start: Date; end: Date },
-): number {
-  const from = Math.max(startMs, range.start.getTime());
-  const to = Math.min(endMs, range.end.getTime());
-  return to > from ? to - from : 0;
-}
-
 function apportionedSeconds(
   session: SessionFocusSlice,
   range: { start: Date; end: Date },
@@ -54,13 +44,13 @@ function apportionedSeconds(
   const duration = session.durationSeconds ?? 0;
   if (endMs === null || endMs <= startMs || duration <= 0) return 0;
 
-  const overlap = overlapSeconds(startMs, endMs, range);
-  if (overlap <= 0) return 0;
-  const wall = endMs - startMs;
-  return Math.max(
-    0,
-    Math.min(duration, Math.round((duration * overlap) / wall)),
-  );
+  const allocated = (at: Date) =>
+    Math.floor(
+      (duration *
+        Math.max(0, Math.min(endMs - startMs, at.getTime() - startMs))) /
+        (endMs - startMs),
+    );
+  return Math.max(0, allocated(range.end) - allocated(range.start));
 }
 
 /** Focus seconds contributed by one Session to a half-open range. */
@@ -71,8 +61,9 @@ export function focusSecondsInRange(
 ): number {
   if (session.status === "cancelled") return 0;
 
-  if (session.timeBasis === "observed" && session.intervals.length > 0) {
-    let totalMs = 0;
+  if (session.timeBasis === "observed") {
+    let beforeEndMs = 0;
+    let beforeStartMs = 0;
     for (const interval of session.intervals) {
       if (interval.phase && interval.phase !== "focus") continue;
       const startMs = new Date(interval.startedAt).getTime();
@@ -84,14 +75,22 @@ export function focusSecondsInRange(
           : Infinity,
       );
       if (endMs <= startMs) continue;
-      totalMs += overlapSeconds(startMs, endMs, range);
+      beforeEndMs += Math.max(
+        0,
+        Math.min(endMs, range.end.getTime()) - startMs,
+      );
+      beforeStartMs += Math.max(
+        0,
+        Math.min(endMs, range.start.getTime()) - startMs,
+      );
     }
-    return Math.floor(totalMs / 1000);
+    return Math.floor(beforeEndMs / 1000) - Math.floor(beforeStartMs / 1000);
   }
 
-  // Manual / corrected (and defensive fallback for interval-less
-  // observed rows): apportion the declared duration by wall overlap.
-  return apportionedSeconds(session, range);
+  return apportionedSeconds(session, {
+    start: range.start,
+    end: new Date(Math.min(range.end.getTime(), now.getTime())),
+  });
 }
 
 /** Aggregate Session focus in [range.start, range.end). */

@@ -459,7 +459,7 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "Advance timer phase",
       description:
-        "Explicitly start_break after a focus deadline, or start_next_focus after focus is due or during a break. Requires expectedPhaseId. No automatic phase continuation. Repeating the successful action is safe; a different action from an old phase returns STALE_SESSION_PHASE.",
+        "Explicitly start_break after a focus deadline, or start_next_focus after focus is due or during a break. Requires expectedPhaseId. No automatic phase continuation. The configured iterations limit applies: after the final focus, no further focus or break can start; use session_finish to save. Repeating the successful action is safe; a different action from an old phase returns STALE_SESSION_PHASE.",
       inputSchema: sessionAdvanceSchema,
     },
     (input: z.output<typeof sessionAdvanceSchema>) =>
@@ -520,7 +520,7 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "List sessions",
       description:
-        "List Session history with half-open time boundaries and safe cursor pagination. Cancelled records are hidden unless explicitly requested.",
+        "List Session history with half-open UTC boundaries and 1–100 cursor pagination. dateMode=started filters by start time (one row per Session); dateMode=focus requires from/to and finds positive focus intersecting that range, including Sessions started earlier. now freezes the live snapshot. Cancelled records appear only with includeCancelled and never in focus mode.",
       inputSchema: sessionListSchema,
     },
     (input: z.output<typeof sessionListSchema>) =>
@@ -544,7 +544,7 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "Correct session",
       description:
-        "Correct a completed Session's ownership, times, or text. Time edits switch the statistics basis to corrected while keeping the original intervals. Overlap requires allowOverlap=true.",
+        "Correct a completed Session's ownership, times, or text. Time edits switch the statistics basis to corrected while keeping the original intervals. start, end and effective duration are independent; time/ownership/intent edits require expectedRevision from session_get; note/hint edits require their independent expectedNoteVersion/expectedResumeHintVersion. Changing Goal requires choosing or clearing Task. Overlap requires allowOverlap=true.",
       inputSchema: sessionUpdateSchema,
     },
     (input: z.output<typeof sessionUpdateSchema>) =>
@@ -556,7 +556,7 @@ export function createTimeOsMcpServer(deps: {
     {
       title: "Get focus statistics",
       description:
-        "Get today, week, month, or custom focus totals by Goal, using the configured timezone and real interval math.",
+        "Get today, week, month, custom (max 366 local days), or all-time totals in seconds with configured timezone/week start. goalId filters every metric. daily=true returns bounded daily seconds, distinct Session counts and currently completed Task counts; period=all returns aggregates without daily enumeration. now sets one snapshot shared with sessions_list; timezone and weekStartsOn can pin the same preference snapshot across queries. Daily Session counts must not be summed for the period count.",
       inputSchema: statsQuerySchema,
     },
     (input: z.output<typeof statsQuerySchema>) =>

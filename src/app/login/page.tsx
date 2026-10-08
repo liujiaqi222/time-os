@@ -29,9 +29,12 @@ export default async function LoginPage({
         </div>
         <Card className="border-stone-300 bg-white/90 shadow-sm">
           <CardHeader>
-            <CardTitle>
-              {ownerExists ? "登录你的实例" : "创建实例账户"}
-            </CardTitle>
+            <CardTitle>{ownerExists ? "欢迎回来" : "设置实例密码"}</CardTitle>
+            <p className="text-sm leading-6 text-stone-500">
+              {ownerExists
+                ? "这个实例已设置密码，请输入密码继续。"
+                : "第一次使用，设置你的名称和密码。以后在其他设备上也用这个密码登录。"}
+            </p>
           </CardHeader>
           <CardContent>
             <LoginForm

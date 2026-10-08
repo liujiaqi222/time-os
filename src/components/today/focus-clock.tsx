@@ -1,9 +1,8 @@
 import { cn } from "cn";
 
 /**
- * Large stopwatch. Digits sit in `1ch` slots and the colon is two dots,
- * so the pairs share one baseline instead of drifting inside a monospace
- * em box.
+ * Stable digit slots keep the clock still as time changes. A light sans-serif
+ * face avoids slashed zeroes, with small separators and explicit unit labels.
  */
 export function FocusClock({
   value,
@@ -21,14 +20,14 @@ export function FocusClock({
   return (
     <div
       className={cn(
-        "relative flex items-center justify-center font-mono leading-none font-medium tabular-nums",
+        "relative flex flex-col items-center justify-center gap-3 font-sans leading-none font-light tabular-nums",
         wide
-          ? "text-[3.35rem] sm:text-[5.75rem]"
-          : "text-[4.75rem] sm:text-[7.25rem]",
+          ? "text-[2.75rem] sm:text-[5rem]"
+          : "text-[3.5rem] sm:text-[clamp(5rem,8vw,7rem)]",
         tone === "paused"
           ? "text-stone-400"
           : tone === "idle"
-            ? "text-stone-300"
+            ? "text-stone-600"
             : "text-stone-950",
         className,
       )}
@@ -40,14 +39,23 @@ export function FocusClock({
         {groups.map((group, groupIndex) => (
           <span key={groupIndex} className="flex items-center">
             {groupIndex > 0 && <ClockColon />}
-            {group.split("").map((digit, digitIndex) => (
-              <span
-                key={digitIndex}
-                className="inline-flex w-[1ch] items-center justify-center"
-              >
-                {digit}
+            <span className="grid grid-rows-[1em_12px] gap-2 sm:gap-4">
+              <span className="flex items-center">
+                {group.split("").map((digit, digitIndex) => (
+                  <span
+                    key={digitIndex}
+                    className="inline-flex w-[0.62em] items-center justify-center"
+                  >
+                    {digit}
+                  </span>
+                ))}
               </span>
-            ))}
+              <span className="text-center text-[10px]/3 font-medium tracking-widest text-stone-400">
+                {groups.length === 3
+                  ? ["时", "分", "秒"][groupIndex]
+                  : ["分", "秒"][groupIndex]}
+              </span>
+            </span>
           </span>
         ))}
       </span>
@@ -57,9 +65,9 @@ export function FocusClock({
 
 function ClockColon() {
   return (
-    <span className="mx-[0.14em] flex h-[0.42em] flex-col items-center justify-between">
-      <span className="block size-[0.085em] rounded-full bg-current" />
-      <span className="block size-[0.085em] rounded-full bg-current" />
+    <span className="mx-[0.13em] mb-5 flex h-[0.3em] flex-col items-center justify-between opacity-40 sm:mb-7">
+      <span className="block size-[0.045em] rounded-full bg-current" />
+      <span className="block size-[0.045em] rounded-full bg-current" />
     </span>
   );
 }

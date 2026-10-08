@@ -4,6 +4,9 @@ import {
   getLocalDayInterval,
   getLocalDayRange,
   getLocalPeriodInterval,
+  localDateStart,
+  localDateKey,
+  parseLocalDateTime,
 } from "@/shared/timezone";
 
 describe("timezone helper", () => {
@@ -63,4 +66,24 @@ describe("timezone helper", () => {
     // Local 23:59:59.999 is 2026-09-23 03:59:59.999 UTC
     expect(end.toISOString()).toBe("2026-09-23T03:59:59.999Z");
   });
+});
+
+it("starts a midnight DST day at the first existing instant", () => {
+  const start = localDateStart("2026-09-06", "America/Santiago");
+  expect(start.toISOString()).toBe("2026-09-06T04:00:00.000Z");
+  expect(localDateKey(start, "America/Santiago")).toBe("2026-09-06");
+  expect(
+    localDateStart("2026-09-07", "America/Santiago").getTime() -
+      start.getTime(),
+  ).toBe(23 * 3600000);
+});
+it("represents a skipped civil day as empty instead of assigning time to the wrong date", () => {
+  expect(localDateStart("2011-12-30", "Pacific/Apia")).toEqual(
+    localDateStart("2011-12-31", "Pacific/Apia"),
+  );
+});
+it("rejects nonexistent local input during the DST spring gap", () => {
+  expect(() =>
+    parseLocalDateTime("2026-03-08T02:30", "America/New_York"),
+  ).toThrow(/does not exist/);
 });

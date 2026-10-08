@@ -114,6 +114,9 @@ export const tasks = pgTable(
     // Composite key so sessions.goalId can reference (id, goal_id) and the
     // database itself guarantees Session/Task/Goal ownership (PRD §3.3, §10).
     unique("tasks_id_goal_unique").on(table.id, table.goalId),
+    index("tasks_completed_at_idx")
+      .on(table.completedAt, table.id)
+      .where(sql`${table.status} = 'completed'`),
     index("tasks_goal_status_position_idx").on(
       table.goalId,
       table.status,
@@ -170,6 +173,10 @@ export const sessions = pgTable(
     index("sessions_goal_started_idx").on(table.goalId, table.startedAt),
     index("sessions_task_idx").on(table.taskId),
     index("sessions_status_started_idx").on(table.status, table.startedAt),
+    index("sessions_started_id_idx").on(table.startedAt, table.id),
+    index("sessions_ended_idx")
+      .on(table.endedAt)
+      .where(sql`${table.status} <> 'cancelled'`),
   ],
 );
 
@@ -230,6 +237,9 @@ export const focusIntervals = pgTable(
       sql`${table.endedAt} is null or ${table.endedAt} >= ${table.startedAt}`,
     ),
     index("focus_intervals_session_idx").on(table.sessionId),
+    index("focus_intervals_session_focus_idx")
+      .on(table.sessionId, table.startedAt)
+      .where(sql`${table.phase} = 'focus'`),
   ],
 );
 

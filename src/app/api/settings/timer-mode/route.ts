@@ -1,3 +1,4 @@
+import { isSameOriginRequest } from "@/auth/same-origin";
 import { z } from "zod";
 
 import { readWebSession } from "@/auth/web-session";
@@ -10,7 +11,7 @@ const inputSchema = z
 
 // Preference saving must not occupy the Server Action queue used to start a session.
 export async function PATCH(request: Request) {
-  if (request.headers.get("origin") !== new URL(request.url).origin)
+  if (!isSameOriginRequest(request))
     return Response.json({ ok: false }, { status: 403 });
   if (!(await readWebSession()))
     return Response.json({ ok: false }, { status: 401 });

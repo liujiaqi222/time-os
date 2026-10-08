@@ -24,23 +24,23 @@ const databaseUrl =
   "postgresql://postgres:postgres@localhost:55432/time_os_test";
 
 export async function loginAndSetup(page: Page) {
-  await page.goto("/login");
+  await page.goto("/login?next=/setup");
 
-  const createPassword = page.getByLabel("设置实例密码");
+  await page.locator("#password").waitFor({ state: "visible" });
+  const createPassword = page.getByLabel("设置实例密码", { exact: true });
   if (await createPassword.isVisible()) {
+    await page.getByLabel("你的名称").fill("E2E Owner");
     await createPassword.fill(webPassword);
-    await page.getByRole("button", { name: "创建并进入 Time OS" }).click();
+    await page.getByLabel("确认实例密码").fill(webPassword);
+    await page.getByRole("button", { name: "保存并进入 Time OS" }).click();
   } else {
-    await page.getByLabel("实例密码").fill(webPassword);
+    await page.getByLabel("实例密码", { exact: true }).fill(webPassword);
     await page.getByRole("button", { name: "进入 Time OS" }).click();
   }
 
-  await page.waitForURL((url) => url.pathname !== "/login");
-
-  // Revisit setup explicitly instead of inferring state from a racing redirect.
-  // Completing it is idempotent and makes this helper robust after a test has
-  // rebuilt the database underneath an existing browser session.
-  await page.goto("/setup");
+  // Use setup as the explicit login callback, so its redirect does not
+  // race a second navigation issued by the test.
+  await page.waitForURL("**/setup");
   await page.getByLabel("时区").fill("Asia/Shanghai");
   await page.getByRole("button", { name: "完成设置" }).click();
   await page.waitForURL(/\/(onboarding|today)/);

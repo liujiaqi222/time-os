@@ -12,6 +12,13 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/app/(app)/history/actions", () => ({
+  getFirstExecutionFeedbackAction: vi
+    .fn()
+    .mockResolvedValue({ ok: true, data: null }),
+}));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 import { EndCard } from "@/components/today/end-card";
 import type { Task } from "@/db/schema";
 import type { SessionView } from "@/services/session";

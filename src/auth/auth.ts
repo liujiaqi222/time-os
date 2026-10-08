@@ -15,6 +15,7 @@ import { authDb } from "@/db/client";
 import { env } from "@/env";
 import { OWNER_EMAIL } from "@/auth/constants";
 import { MCP_READ_SCOPE, MCP_WRITE_SCOPE } from "@/auth/scopes";
+import { userNameSchema } from "@/shared/schemas/profile";
 
 export { MCP_READ_SCOPE, MCP_WRITE_SCOPE } from "@/auth/scopes";
 
@@ -26,6 +27,7 @@ export const auth = betterAuth({
   baseURL: appOrigin,
   secret: env.BETTER_AUTH_SECRET,
   database: drizzleAdapter(authDb, { provider: "pg", schema: authSchema }),
+  advanced: { database: { joins: true } },
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 12,
@@ -35,6 +37,14 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 90,
     updateAge: 60 * 60 * 24,
+    // Verify a short-lived encrypted cookie locally instead of querying Neon
+    // for the session and user on every timer command. Revocation is rechecked
+    // after at most 30 seconds; sign-out clears this browser's cache immediately.
+    cookieCache: {
+      enabled: true,
+      maxAge: 30,
+      strategy: "jwe",
+    },
   },
   trustedOrigins: [appOrigin],
   telemetry: { enabled: false },
@@ -59,19 +69,41 @@ export const auth = betterAuth({
             });
           }
 
+          const parsed = userNameSchema.safeParse(user.name);
+          if (!parsed.success) {
+            throw new APIError("BAD_REQUEST", {
+              message: parsed.error.issues[0].message,
+            });
+          }
+
           return {
             data: {
               ...user,
               email: OWNER_EMAIL,
-              name: "Time OS Owner",
+              name: parsed.data,
             },
           };
+        },
+      },
+      update: {
+        before: async (user) => {
+          if (user.name === undefined) return;
+          const parsed = userNameSchema.safeParse(user.name);
+          if (!parsed.success) {
+            throw new APIError("BAD_REQUEST", {
+              message: parsed.error.issues[0].message,
+            });
+          }
+          return { data: { ...user, name: parsed.data } };
         },
       },
     },
   },
   plugins: [
-    jwt(),
+    // Web requests only need the session. Automatic JWT header generation
+    // queries the signing key on every getSession, even on a cookie-cache hit.
+    // MCP/OAuth still use the JWT plugin's explicit signing and JWKS endpoints.
+    jwt({ disableSettingJwtHeader: true }),
     mcp({
       loginPage: "/login",
       consentPage: "/oauth/consent",

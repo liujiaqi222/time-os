@@ -5,10 +5,8 @@ import { Clock3, Flame } from "lucide-react";
 
 import {
   completeTaskAction,
-  finishSessionAction,
   getDashboardAction,
   getSessionAction,
-  startSessionAction,
   updateResumeHintAction,
 } from "@/app/(app)/session-actions";
 import { Button } from "@/components/ui/button";
@@ -50,17 +48,12 @@ export function TodayView({
   } | null>(null);
   const [endCard, setEndCard] = useState<SessionView | null>(null);
   const [completionMoment, setCompletionMoment] = useState(0);
+  const [statsRefreshKey, setStatsRefreshKey] = useState(0);
   const [cancelOpen, setCancelOpen] = useState(false);
 
   // The Session this page believes is running; null when idle/none.
   const runningIdRef = useRef<string | null>(
     initialDashboard.activeSession?.id ?? null,
-  );
-  // The portion of today's total already represented by the dashboard read.
-  // Timer actions return authoritative durations, so success can update the
-  // summary locally instead of blocking on another full dashboard request.
-  const dashboardSessionSecondsRef = useRef(
-    initialDashboard.activeSession?.focusSeconds ?? 0,
   );
   // Set when THIS page ends/cancels so the cross-end detector stays quiet.
   const startKeyRef = useRef<string | null>(null);
@@ -80,12 +73,14 @@ export function TodayView({
       epoch === mutationEpoch.current &&
       busyRef.current === "none"
     ) {
-      dashboardSessionSecondsRef.current =
-        result.data.activeSession?.focusSeconds ?? 0;
       setDashboard(result.data);
     }
     return result.ok ? result.data : null;
   }, []);
+
+  useEffect(() => {
+    if (statsRefreshKey > 0) void refresh();
+  }, [statsRefreshKey, refresh]);
 
   const checkRemoteEnd = useCallback(async (sessionId: string) => {
     const result = await getSessionAction(sessionId);
@@ -183,22 +178,27 @@ export function TodayView({
     setBusy("start");
     setActionError(null);
     setRemoteNotice(null);
-    const result = await startSessionAction({
-      goalId: selection.goal.id,
-      taskId: selection.task?.id ?? null,
-      intent: input.intent,
-      timerMode: input.timerMode,
-      idempotencyKey: (startKeyRef.current ??= crypto.randomUUID()),
-    }).catch(() => ({
-      ok: false as const,
-      error: {
-        code: "DATABASE_UNAVAILABLE" as const,
-        message: "连接失败，请重试。",
-      },
-    }));
+    const result: Result<SessionView> = await fetch("/api/session/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        goalId: selection.goal.id,
+        taskId: selection.task?.id ?? null,
+        intent: input.intent,
+        timerMode: input.timerMode,
+        idempotencyKey: (startKeyRef.current ??= crypto.randomUUID()),
+      }),
+    })
+      .then((response) => response.json())
+      .catch(() => ({
+        ok: false as const,
+        error: {
+          code: "DATABASE_UNAVAILABLE" as const,
+          message: "连接失败，请重试。",
+        },
+      }));
     if (result.ok) {
       startKeyRef.current = null;
-      dashboardSessionSecondsRef.current = 0;
       setExecutionHint({
         sessionId: result.data.id,
         hint: dashboard.resumeHint,
@@ -227,42 +227,37 @@ export function TodayView({
     changed: boolean;
   }) => {
     const session = dashboard.activeSession;
-    if (!session || busy !== "none") return;
+    if (!session || busy !== "none") return false;
     setBusy("finish");
     setActionError(null);
-    const result = await finishSessionAction({
-      sessionId: session.id,
-      ...(payload.changed
-        ? { note: payload.note, noteExpectedVersion: payload.expectedVersion }
-        : {}),
-    }).catch(() => ({
-      ok: false as const,
-      error: {
-        code: "DATABASE_UNAVAILABLE" as const,
-        message: "保存失败，请重试。",
-      },
-    }));
+    const result: Result<SessionView> = await fetch("/api/session/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: session.id,
+        ...(payload.changed
+          ? { note: payload.note, noteExpectedVersion: payload.expectedVersion }
+          : {}),
+      }),
+    })
+      .then((response) => response.json())
+      .catch(() => ({
+        ok: false as const,
+        error: {
+          code: "DATABASE_UNAVAILABLE" as const,
+          message: "保存失败，请重试。",
+        },
+      }));
     if (result.ok) {
       selfEndRef.current = true;
       runningIdRef.current = null;
-      const knownSeconds = dashboardSessionSecondsRef.current;
-      const finalSeconds = result.data.durationSeconds ?? 0;
-      dashboardSessionSecondsRef.current = 0;
       setEndCard(result.data);
       setCompletionMoment((moment) => moment + 1);
+      setStatsRefreshKey((key) => key + 1);
       setDashboard((prev) => ({
         ...prev,
         serverNow: result.data.serverNow,
         activeSession: null,
-        todayStats: {
-          ...prev.todayStats,
-          totalFocusSeconds:
-            prev.todayStats.totalFocusSeconds +
-            Math.max(0, finalSeconds - knownSeconds),
-          sessionCount:
-            prev.todayStats.sessionCount +
-            (knownSeconds === 0 && finalSeconds > 0 ? 1 : 0),
-        },
       }));
     } else {
       // Kept the current info and the retry entry (PRD §6.5); if it ended
@@ -271,6 +266,7 @@ export function TodayView({
       setActionError("结束保存失败：当前信息已保留，可重试。");
     }
     setBusy("none");
+    return result.ok;
   };
 
   const handleCancel = async () => {
@@ -299,23 +295,11 @@ export function TodayView({
       selfEndRef.current = true;
       runningIdRef.current = null;
       setCancelOpen(false);
-      const knownSeconds = dashboardSessionSecondsRef.current;
-      dashboardSessionSecondsRef.current = 0;
+      setStatsRefreshKey((key) => key + 1);
       setDashboard((prev) => ({
         ...prev,
         serverNow: result.data.serverNow,
         activeSession: null,
-        todayStats: {
-          ...prev.todayStats,
-          totalFocusSeconds: Math.max(
-            0,
-            prev.todayStats.totalFocusSeconds - knownSeconds,
-          ),
-          sessionCount: Math.max(
-            0,
-            prev.todayStats.sessionCount - (knownSeconds > 0 ? 1 : 0),
-          ),
-        },
       }));
     } else {
       await refresh();
@@ -452,15 +436,15 @@ export function TodayView({
   const { activeSession, selection, todayStats } = dashboard;
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-5 pb-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mx-auto w-full max-w-5xl space-y-5 pb-6 sm:space-y-6">
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs font-semibold tracking-normal text-[#b54b35]">
+          <h1 className="text-base font-semibold tracking-normal text-[#b54b35] sm:text-lg">
             今天
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-[-0.035em] text-stone-950 sm:text-3xl">
-            {initialHeadline}
           </h1>
+          <p className="mt-1 text-sm text-stone-500 sm:mt-2 sm:text-base">
+            {initialHeadline}
+          </p>
         </div>
         <div className="flex gap-2">
           <StatChip
@@ -512,7 +496,7 @@ export function TodayView({
         </div>
       )}
 
-      <main className="rounded-3xl bg-white p-5 sm:p-8">
+      <main className="rounded-3xl bg-white p-5 sm:px-10 sm:py-8 lg:px-12">
         <div>
           {endCard ? (
             <EndCard
@@ -545,7 +529,7 @@ export function TodayView({
               onSessionLost={handleSessionLost}
               timerPreferences={dashboard.timerSettings?.timerPreferences}
               onPreferencesSaved={() => void refresh()}
-              onFinishRequested={(payload) => void handleFinish(payload)}
+              onFinishRequested={handleFinish}
               onOpenCancel={() => setCancelOpen(true)}
             />
           ) : selection ? (
@@ -604,7 +588,7 @@ function StatChip({
 }) {
   return (
     <div
-      className={`flex min-w-28 items-center gap-2.5 rounded-xl border px-3 py-2 transition-[border-color,background-color,transform] ${
+      className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 transition-[border-color,background-color,transform] ${
         highlighted
           ? "border-[#e8dec1] bg-[#fffdf8]"
           : "border-stone-200 bg-white"
@@ -612,7 +596,7 @@ function StatChip({
       aria-live={celebrating ? "polite" : undefined}
     >
       <span
-        className={`relative flex size-7 items-center justify-center rounded-lg [&_svg]:size-3.5 ${
+        className={`relative flex size-5 items-center justify-center rounded-lg [&_svg]:size-3.5 ${
           highlighted
             ? "bg-[#f4e7bd] text-[#8b6416] [&_svg]:fill-current"
             : "bg-stone-100 text-stone-600"
@@ -626,7 +610,7 @@ function StatChip({
         )}
         {icon}
       </span>
-      <span className="min-w-0">
+      <span className="flex min-w-0 items-baseline gap-1.5">
         <span
           className={`block text-[10px] font-medium tracking-wide ${
             highlighted ? "text-[#8a7957]" : "text-stone-400"

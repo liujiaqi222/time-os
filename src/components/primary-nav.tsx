@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Footprints, Settings, SunMedium } from "lucide-react";
+import { Footprints, SunMedium } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "cn";
@@ -65,7 +65,7 @@ export function PrimaryNav({ variant }: { variant: "desktop" | "mobile" }) {
   return (
     <nav
       aria-label="主导航"
-      className="fixed inset-x-3 bottom-3 z-40 grid grid-cols-3 rounded-2xl border border-stone-200 bg-white p-1.5 shadow-[0_10px_30px_rgba(28,25,23,0.12)] sm:hidden"
+      className="fixed inset-x-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 grid grid-cols-2 rounded-2xl border border-stone-200 bg-white p-1.5 shadow-[0_10px_30px_rgba(28,25,23,0.12)] sm:hidden"
     >
       {links.map(({ href, label, icon: Icon }) => {
         const isCurrent = isCurrentPath(pathname, href);
@@ -84,17 +84,6 @@ export function PrimaryNav({ variant }: { variant: "desktop" | "mobile" }) {
           </Link>
         );
       })}
-      <Link
-        href="/settings"
-        aria-current={isCurrentPath(pathname, "/settings") ? "page" : undefined}
-        className={cn(
-          "flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium text-stone-500 transition-colors",
-          isCurrentPath(pathname, "/settings") && "bg-stone-900 text-white",
-        )}
-      >
-        <Settings className="size-4" aria-hidden="true" />
-        设置
-      </Link>
     </nav>
   );
 }

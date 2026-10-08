@@ -125,7 +125,7 @@ describe("useNoteAutosave", () => {
     expect(result.current.note).toBe("my words");
   });
 
-  it("flush saves immediately with the pending text before finish", async () => {
+  it("flush transfers pending text to finish and cancels the separate save", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true });
     const { result } = renderAutosave({ save });
 
@@ -136,7 +136,8 @@ describe("useNoteAutosave", () => {
       expectedVersion: 0,
       changed: true,
     });
-    expect(save).toHaveBeenCalledWith("s1", "last words", 0);
+    await act(async () => vi.advanceTimersByTime(600));
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("flush reports changed=false when nothing is pending", async () => {

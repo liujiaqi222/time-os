@@ -1,5 +1,7 @@
 import { headers } from "next/headers";
 import { SettingsForm } from "@/components/settings-form";
+import { ProfileForm } from "@/components/profile-form";
+import { redirect } from "next/navigation";
 import { disconnectChatGptAction } from "@/app/settings/actions";
 import { auth, MCP_RESOURCE } from "@/auth/auth";
 import { Button } from "@/components/ui/button";
@@ -9,10 +11,13 @@ import { timerModeLabel } from "@/shared/labels";
 import Link from "next/link";
 
 export default async function SettingsPage() {
-  const [settings, consents] = await Promise.all([
+  const requestHeaders = await headers();
+  const [settings, consents, session] = await Promise.all([
     settingsService.get({ actor: "web" }),
-    auth.api.getOAuthConsents({ headers: await headers() }),
+    auth.api.getOAuthConsents({ headers: requestHeaders }),
+    auth.api.getSession({ headers: requestHeaders }),
   ]);
+  if (!session) redirect("/login?next=/settings");
   const chatGptConsents = consents.filter((consent) => {
     try {
       return new URL(consent.clientId).hostname === "chatgpt.com";
@@ -28,6 +33,14 @@ export default async function SettingsPage() {
         </p>
         <h1 className="text-4xl font-semibold tracking-tight">设置</h1>
       </header>
+      <Card>
+        <CardHeader>
+          <CardTitle>个人信息</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ProfileForm name={session.user.name} />
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>时间偏好</CardTitle>

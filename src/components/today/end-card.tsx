@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { configOf } from "@/shared/pomodoro";
 import { ArrowRight, Check, CheckCircle2 } from "lucide-react";
 
+import { FirstExecutionFeedback } from "@/components/today/first-execution-feedback";
 import type { Task } from "@/db/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +43,10 @@ export function EndCard({
   onReloadHintVersion: () => Promise<number | null>;
   onClose: (needsRefresh: boolean) => void;
 }) {
+  const allRoundsComplete =
+    session.timerMode === "pomodoro" &&
+    (session.completedFocusCount ?? 0) >=
+      configOf(session.timerConfig).iterations;
   const [taskState, setTaskState] = useState<
     "idle" | "saving" | "done" | "error"
   >("idle");
@@ -126,13 +133,22 @@ export function EndCard({
           <CheckCircle2 className="size-5.5" aria-hidden="true" />
         </span>
         <div>
-          <p className="text-sm font-semibold text-emerald-800">专注已保存</p>
+          <p role="status" className="text-sm font-semibold text-emerald-800">
+            专注已保存
+          </p>
+          {allRoundsComplete && (
+            <p className="mt-1 text-sm text-emerald-800">
+              已完成全部 {configOf(session.timerConfig).iterations}{" "}
+              轮专注，休息一下吧。
+            </p>
+          )}
           <h2 className="mt-0.5 text-3xl font-semibold tracking-[-0.04em] text-stone-950 sm:text-4xl">
             {formatHumanDuration(session.durationSeconds ?? 0)}
           </h2>
         </div>
       </div>
 
+      <FirstExecutionFeedback id={session.id} />
       <section
         className={`mt-6 grid overflow-hidden rounded-2xl border border-stone-200 bg-stone-50/70 ${task ? "sm:grid-cols-2" : ""}`}
         aria-labelledby="execution-context-title"
@@ -239,7 +255,13 @@ export function EndCard({
         </div>
       </section>
 
-      <div className="mt-6 flex justify-end">
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+        <Link
+          href="/history"
+          className="px-3 py-2 text-sm font-medium text-stone-600 hover:text-stone-950"
+        >
+          查看记录
+        </Link>
         <Button
           className="h-10 gap-2 rounded-xl bg-stone-900 px-5 text-white hover:bg-stone-800"
           disabled={hintState === "saving" || taskState === "saving"}
@@ -249,7 +271,9 @@ export function EndCard({
             ? "保存中…"
             : hintChanged
               ? "保存起点并返回"
-              : "回到今天"}
+              : allRoundsComplete
+                ? "开始新执行"
+                : "回到今天"}
           {hintState !== "saving" && (
             <ArrowRight className="size-4" aria-hidden="true" />
           )}
