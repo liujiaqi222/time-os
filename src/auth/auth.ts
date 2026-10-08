@@ -27,6 +27,7 @@ export const auth = betterAuth({
   baseURL: appOrigin,
   secret: env.BETTER_AUTH_SECRET,
   database: drizzleAdapter(authDb, { provider: "pg", schema: authSchema }),
+  advanced: { database: { joins: true } },
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 12,
@@ -36,6 +37,14 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 90,
     updateAge: 60 * 60 * 24,
+    // Verify a short-lived encrypted cookie locally instead of querying Neon
+    // for the session and user on every timer command. Revocation is rechecked
+    // after at most 30 seconds; sign-out clears this browser's cache immediately.
+    cookieCache: {
+      enabled: true,
+      maxAge: 30,
+      strategy: "jwe",
+    },
   },
   trustedOrigins: [appOrigin],
   telemetry: { enabled: false },
@@ -91,7 +100,10 @@ export const auth = betterAuth({
     },
   },
   plugins: [
-    jwt(),
+    // Web requests only need the session. Automatic JWT header generation
+    // queries the signing key on every getSession, even on a cookie-cache hit.
+    // MCP/OAuth still use the JWT plugin's explicit signing and JWKS endpoints.
+    jwt({ disableSettingJwtHeader: true }),
     mcp({
       loginPage: "/login",
       consentPage: "/oauth/consent",

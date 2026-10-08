@@ -39,6 +39,7 @@ export function useNoteAutosave(options: {
   const lastSavedRef = useRef(initialNote ?? "");
   const onSavedRef = useRef(onSaved);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(new Set<Promise<NoteSaveResult>>());
 
   useEffect(() => {
     onSavedRef.current = onSaved;
@@ -47,7 +48,14 @@ export function useNoteAutosave(options: {
   const persist = useCallback(
     async (text: string, expectedVersion: number) => {
       setStatus("saving");
-      const result = await save(sessionId, text, expectedVersion);
+      const request = save(sessionId, text, expectedVersion);
+      inFlightRef.current.add(request);
+      let result: NoteSaveResult;
+      try {
+        result = await request;
+      } finally {
+        inFlightRef.current.delete(request);
+      }
       if (result.ok) {
         versionRef.current = expectedVersion + 1;
         lastSavedRef.current = text;
@@ -68,33 +76,31 @@ export function useNoteAutosave(options: {
 
     setStatus("saving");
     const timeout = setTimeout(async () => {
+      timerRef.current = null;
       await persist(note, versionRef.current);
     }, 600);
+    timerRef.current = timeout;
 
-    return () => clearTimeout(timeout);
-  }, [note, persist]);
-
-  /** Flush a pending debounced save immediately (used before finish). */
-  const flush = useCallback(async () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    const changed = note !== lastSavedRef.current;
-    if (!changed) {
-      return {
-        note: note || null,
-        expectedVersion: versionRef.current,
-        changed: false,
-      };
-    }
-    // Report the version this save was based on, so the finish request
-    // carries the same optimistic version the server will check.
-    const usedVersion = versionRef.current;
-    await persist(note, usedVersion);
-    return {
-      note: note || null,
-      expectedVersion: usedVersion,
-      changed: true,
+    return () => {
+      clearTimeout(timeout);
+      if (timerRef.current === timeout) timerRef.current = null;
     };
   }, [note, persist]);
+
+  /** Transfer pending text to the atomic finish write instead of saving twice. */
+  const flush = useCallback(async () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    // A write already sent must settle before choosing the note version.
+    await Promise.allSettled([...inFlightRef.current]);
+    return {
+      note: note || null,
+      expectedVersion: versionRef.current,
+      changed: note !== lastSavedRef.current,
+    };
+  }, [note]);
 
   /**
    * Conflict recovery (PRD §6.5): reload the latest version and re-save

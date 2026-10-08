@@ -14,10 +14,13 @@ const inputSchema = sessionPauseSchema
 export async function POST(request: Request) {
   if (!isSameOriginRequest(request))
     return Response.json({ ok: false }, { status: 403 });
+  const authorizationStarted = performance.now();
   if (!(await readWebSession()))
     return Response.json({ ok: false }, { status: 401 });
+  const authorizationMs = performance.now() - authorizationStarted;
   const input = inputSchema.safeParse(await request.json().catch(() => null));
   if (!input.success) return Response.json({ ok: false }, { status: 400 });
+  const mutationStarted = performance.now();
   const result = await sessionContract(() =>
     input.data.operation === "pause"
       ? sessionService.pauseSession({ actor: "web" }, input.data.id)
@@ -27,6 +30,9 @@ export async function POST(request: Request) {
   );
   return Response.json(result, {
     status: result.ok ? 200 : 400,
-    headers: { "Cache-Control": "private, no-store" },
+    headers: {
+      "Cache-Control": "private, no-store",
+      "Server-Timing": `auth;dur=${authorizationMs.toFixed(1)}, mutation;dur=${(performance.now() - mutationStarted).toFixed(1)}`,
+    },
   });
 }

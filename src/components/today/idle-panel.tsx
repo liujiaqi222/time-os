@@ -24,7 +24,7 @@ import { formatTimeDigits } from "@/shared/session-timer";
 import { unlockTimerSound } from "./timer-sound";
 import { PhaseProgress } from "./phase-progress";
 import { ExecutionHeading } from "./execution-heading";
-import { TimerStage } from "./timer-stage";
+import { TimerControls, TimerStage } from "./timer-stage";
 import { FocusClock } from "@/components/today/focus-clock";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -212,8 +212,8 @@ export function IdlePanel({
       ?.pendingTaskCount ?? taskOptions.length;
 
   return (
-    <div className="space-y-10">
-      <div className="flex flex-col items-center pt-2">
+    <div className="space-y-7 sm:space-y-10">
+      <div className="flex flex-col items-center">
         <ExecutionHeading
           goal={selection.goal.title}
           task={selection.task?.title}
@@ -252,11 +252,11 @@ export function IdlePanel({
           </div>
         </ExecutionHeading>
 
-        <div className="mt-7 grid w-full grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <div className="mt-4 flex w-full flex-wrap items-center justify-center gap-2 sm:mt-6 sm:gap-5">
           <div
             role="group"
             aria-label="计时模式"
-            className="flex justify-self-center rounded-full bg-stone-100 p-1 sm:col-start-2"
+            className="flex rounded-full bg-stone-100 p-1"
           >
             {(["pomodoro", "stopwatch"] as const).map((value) => (
               <button
@@ -302,7 +302,7 @@ export function IdlePanel({
           <div
             aria-hidden={mode !== "pomodoro"}
             inert={mode !== "pomodoro"}
-            className={`flex items-center justify-center gap-2 sm:col-start-3 sm:justify-start sm:pl-2 ${mode === "pomodoro" ? "visible" : "invisible"}`}
+            className={`flex items-center justify-center gap-2 ${mode === "pomodoro" ? "" : "hidden"}`}
           >
             <TimerPreferences
               value={dashboard.timerSettings?.timerPreferences}
@@ -325,8 +325,8 @@ export function IdlePanel({
             </div>
           }
         >
-          <div className="flex flex-col items-center gap-0">
-            <p className="text-base leading-none font-medium text-stone-400">
+          <div className="flex flex-col items-center gap-3 sm:gap-6">
+            <p className="text-xs leading-none font-medium tracking-wide text-stone-500">
               准备开始
             </p>
             <FocusClock
@@ -337,33 +337,29 @@ export function IdlePanel({
               }
               tone="idle"
               aria-hidden="true"
-              className={
-                formatTimeDigits(config.focusMinutes * 60).length > 5 &&
-                mode === "pomodoro"
-                  ? "text-[2.6rem] sm:text-[3.75rem]"
-                  : "text-[3.75rem] sm:text-[5.25rem]"
-              }
             />
           </div>
         </TimerStage>
 
-        <div className="mt-7 flex w-full flex-col items-center gap-3">
-          <Button
-            size="lg"
-            disabled={busy !== "none"}
-            onClick={() => {
-              unlockTimerSound();
-              onStart({ intent: intent.trim() || null, timerMode: mode });
-            }}
-            className="h-12 w-full max-w-xs gap-2 rounded-xl bg-[#d85c41] px-6 text-base text-white shadow-sm hover:bg-[#c84f36]"
-          >
-            <Play className="size-4 fill-current" aria-hidden="true" />
-            {busy === "start"
-              ? "开始中…"
-              : firstRun
-                ? "开始第一次执行"
-                : "开始专注"}
-          </Button>
+        <div className="mt-3 flex w-full flex-col items-center gap-3 sm:mt-6 sm:gap-5">
+          <TimerControls>
+            <Button
+              size="lg"
+              disabled={busy !== "none"}
+              onClick={() => {
+                unlockTimerSound();
+                onStart({ intent: intent.trim() || null, timerMode: mode });
+              }}
+              className="h-12 w-full gap-2 rounded-xl bg-[#d85c41] px-6 text-base text-white shadow-sm hover:bg-[#c84f36]"
+            >
+              <Play className="size-4 fill-current" aria-hidden="true" />
+              {busy === "start"
+                ? "开始中…"
+                : firstRun
+                  ? "开始第一次执行"
+                  : "开始专注"}
+            </Button>
+          </TimerControls>
           {showIntent ? (
             <div className="w-full max-w-sm rounded-xl border border-stone-200 bg-stone-50 p-3 text-left">
               <div className="flex items-baseline justify-between gap-3">
@@ -571,7 +567,7 @@ function SwitchSelect({
     >
       <SelectTrigger
         aria-label={label}
-        className="h-9 w-full min-w-0 gap-1.5 rounded-[10px] border-transparent bg-transparent px-3 text-stone-800 shadow-none hover:bg-stone-100 sm:w-auto sm:max-w-56 sm:rounded-full sm:px-3.5"
+        className="h-9 w-full min-w-0 gap-1.5 rounded-[10px] border-transparent bg-transparent px-3 text-stone-800 shadow-none hover:bg-stone-100 data-[size=default]:h-9 sm:w-auto sm:max-w-56 sm:rounded-full sm:px-3.5"
       >
         <span className="shrink-0 text-xs text-stone-400">{label}</span>
         <SelectValue className="min-w-0 flex-1 text-left font-medium text-stone-900" />

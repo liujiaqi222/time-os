@@ -5,10 +5,8 @@ import { Clock3, Flame } from "lucide-react";
 
 import {
   completeTaskAction,
-  finishSessionAction,
   getDashboardAction,
   getSessionAction,
-  startSessionAction,
   updateResumeHintAction,
 } from "@/app/(app)/session-actions";
 import { Button } from "@/components/ui/button";
@@ -180,19 +178,25 @@ export function TodayView({
     setBusy("start");
     setActionError(null);
     setRemoteNotice(null);
-    const result = await startSessionAction({
-      goalId: selection.goal.id,
-      taskId: selection.task?.id ?? null,
-      intent: input.intent,
-      timerMode: input.timerMode,
-      idempotencyKey: (startKeyRef.current ??= crypto.randomUUID()),
-    }).catch(() => ({
-      ok: false as const,
-      error: {
-        code: "DATABASE_UNAVAILABLE" as const,
-        message: "连接失败，请重试。",
-      },
-    }));
+    const result: Result<SessionView> = await fetch("/api/session/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        goalId: selection.goal.id,
+        taskId: selection.task?.id ?? null,
+        intent: input.intent,
+        timerMode: input.timerMode,
+        idempotencyKey: (startKeyRef.current ??= crypto.randomUUID()),
+      }),
+    })
+      .then((response) => response.json())
+      .catch(() => ({
+        ok: false as const,
+        error: {
+          code: "DATABASE_UNAVAILABLE" as const,
+          message: "连接失败，请重试。",
+        },
+      }));
     if (result.ok) {
       startKeyRef.current = null;
       setExecutionHint({
@@ -226,18 +230,24 @@ export function TodayView({
     if (!session || busy !== "none") return false;
     setBusy("finish");
     setActionError(null);
-    const result = await finishSessionAction({
-      sessionId: session.id,
-      ...(payload.changed
-        ? { note: payload.note, noteExpectedVersion: payload.expectedVersion }
-        : {}),
-    }).catch(() => ({
-      ok: false as const,
-      error: {
-        code: "DATABASE_UNAVAILABLE" as const,
-        message: "保存失败，请重试。",
-      },
-    }));
+    const result: Result<SessionView> = await fetch("/api/session/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: session.id,
+        ...(payload.changed
+          ? { note: payload.note, noteExpectedVersion: payload.expectedVersion }
+          : {}),
+      }),
+    })
+      .then((response) => response.json())
+      .catch(() => ({
+        ok: false as const,
+        error: {
+          code: "DATABASE_UNAVAILABLE" as const,
+          message: "保存失败，请重试。",
+        },
+      }));
     if (result.ok) {
       selfEndRef.current = true;
       runningIdRef.current = null;
@@ -426,15 +436,15 @@ export function TodayView({
   const { activeSession, selection, todayStats } = dashboard;
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-5 pb-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mx-auto w-full max-w-5xl space-y-5 pb-6 sm:space-y-6">
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs font-semibold tracking-normal text-[#b54b35]">
+          <h1 className="text-base font-semibold tracking-normal text-[#b54b35] sm:text-lg">
             今天
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-[-0.035em] text-stone-950 sm:text-3xl">
-            {initialHeadline}
           </h1>
+          <p className="mt-1 text-sm text-stone-500 sm:mt-2 sm:text-base">
+            {initialHeadline}
+          </p>
         </div>
         <div className="flex gap-2">
           <StatChip
@@ -486,7 +496,7 @@ export function TodayView({
         </div>
       )}
 
-      <main className="rounded-3xl bg-white p-5 sm:p-8">
+      <main className="rounded-3xl bg-white p-5 sm:px-10 sm:py-8 lg:px-12">
         <div>
           {endCard ? (
             <EndCard
@@ -578,7 +588,7 @@ function StatChip({
 }) {
   return (
     <div
-      className={`flex min-w-28 items-center gap-2.5 rounded-xl border px-3 py-2 transition-[border-color,background-color,transform] ${
+      className={`flex items-center gap-2 rounded-xl border px-2.5 py-1.5 transition-[border-color,background-color,transform] ${
         highlighted
           ? "border-[#e8dec1] bg-[#fffdf8]"
           : "border-stone-200 bg-white"
@@ -586,7 +596,7 @@ function StatChip({
       aria-live={celebrating ? "polite" : undefined}
     >
       <span
-        className={`relative flex size-7 items-center justify-center rounded-lg [&_svg]:size-3.5 ${
+        className={`relative flex size-5 items-center justify-center rounded-lg [&_svg]:size-3.5 ${
           highlighted
             ? "bg-[#f4e7bd] text-[#8b6416] [&_svg]:fill-current"
             : "bg-stone-100 text-stone-600"
@@ -600,7 +610,7 @@ function StatChip({
         )}
         {icon}
       </span>
-      <span className="min-w-0">
+      <span className="flex min-w-0 items-baseline gap-1.5">
         <span
           className={`block text-[10px] font-medium tracking-wide ${
             highlighted ? "text-[#8a7957]" : "text-stone-400"

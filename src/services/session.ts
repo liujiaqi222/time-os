@@ -499,7 +499,7 @@ export function createSessionService(
     return row ? viewFromFastRow(row, startedAt) : null;
   }
 
-  /** One-statement finish for the same latency-sensitive web path. */
+  /** Finish both timer modes in one database roundtrip, including the final note. */
   async function fastFinish(
     value: ReturnType<typeof sessionFinishSchema.parse>,
   ): Promise<SessionView | null> {
@@ -512,24 +512,43 @@ export function createSessionService(
       ), target as materialized (
         select s.*
         from session_lock
-        join sessions s on s.id = ${value.id}::uuid and s.timer_mode = 'stopwatch'
+        join sessions s on s.id = ${value.id}::uuid
         for update of s
+      ), current_phase as materialized (
+        select p.* from session_phases p
+        join target t on t.id = p.session_id
+        order by p.sequence desc limit 1
+        for update of p
+      ), eligible as materialized (
+        select t.* from target t
+        where t.revision = (select snapshot.revision from sessions snapshot where snapshot.id = t.id)
+      ), phase_changed as (
+        update session_phases p
+        set ended_at = least(coalesce(cp.deadline_at, ${now}::timestamptz), ${now}::timestamptz),
+          complete = cp.complete or (cp.kind = 'focus' and cp.paused_at is null and cp.deadline_at <= ${now}),
+          remaining_ms = case when cp.paused_at is not null then cp.remaining_ms
+            else greatest(0, extract(epoch from (cp.deadline_at - ${now}::timestamptz)) * 1000)::integer end
+        from current_phase cp, eligible t
+        where p.id = cp.id and cp.ended_at is null
+          and t.status in ('active', 'paused')
+        returning p.*
       ), closed as (
         update focus_intervals fi
-        set ended_at = ${now}, updated_at = ${now}
-        from target t
+        set ended_at = least(coalesce(fi.deadline_at, ${now}::timestamptz), ${now}::timestamptz), updated_at = ${now}
+        from eligible t
         where fi.session_id = t.id
           and fi.ended_at is null
-        returning fi.id
+          and t.status in ('active', 'paused')
+        returning fi.*
       ), close_marker as materialized (
-        select count(*) as closed_count from closed
+        select (select count(*) from closed) + (select count(*) from phase_changed) as closed_count
       ), duration as materialized (
         select coalesce(
           floor(sum(extract(epoch from (
-            coalesce(fi.ended_at, ${now}) - fi.started_at
+            least(coalesce(fi.ended_at, fi.deadline_at, ${now}::timestamptz), ${now}::timestamptz) - fi.started_at
           )))), 0
         )::integer as seconds
-        from focus_intervals fi, target t, close_marker
+        from focus_intervals fi, eligible t, close_marker
         where fi.session_id = t.id and fi.phase = 'focus'
       ), updated as (
         update sessions s
@@ -553,13 +572,13 @@ export function createSessionService(
           end,
           revision = t.revision + 1,
           updated_at = ${now}
-        from target t, duration
+        from eligible t, duration
         where s.id = t.id and t.status in ('active', 'paused')
         returning s.*
       ), chosen as (
         select * from updated
         union all
-        select t.* from target t
+        select t.* from eligible t
         where t.status = 'completed' and not exists (select 1 from updated)
       )
       select
@@ -569,18 +588,20 @@ export function createSessionService(
         coalesce(
           (
             select json_agg(
-              case
-                when fi.ended_at is null
-                  then jsonb_set(to_jsonb(fi), '{ended_at}', to_jsonb(${now}::timestamptz))
-                else to_jsonb(fi)
-              end
+              coalesce(to_jsonb(c), to_jsonb(fi))
               order by fi.started_at, fi.id
             )
             from focus_intervals fi
+            left join closed c on c.id = fi.id
             where fi.session_id = chosen.id
           ),
           '[]'::json
         ) as intervals,
+        coalesce((
+          select json_agg(coalesce(to_jsonb(pc), to_jsonb(p)) order by p.sequence)
+          from session_phases p left join phase_changed pc on pc.id = p.id
+          where p.session_id = chosen.id
+        ), '[]'::json) as phases,
         (
           ${hasNote}::boolean
           and ${hasExpectedVersion}::boolean

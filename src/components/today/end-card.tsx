@@ -139,7 +139,7 @@ export function EndCard({
           {allRoundsComplete && (
             <p className="mt-1 text-sm text-emerald-800">
               已完成全部 {configOf(session.timerConfig).iterations}{" "}
-              轮专注，辛苦了！
+              轮专注，休息一下吧。
             </p>
           )}
           <h2 className="mt-0.5 text-3xl font-semibold tracking-[-0.04em] text-stone-950 sm:text-4xl">

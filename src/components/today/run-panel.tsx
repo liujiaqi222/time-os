@@ -41,7 +41,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useTimerDisplay } from "./use-timer-display";
 import { ExecutionHeading } from "./execution-heading";
-import { TimerStage } from "./timer-stage";
+import { TimerControls, TimerStage } from "./timer-stage";
 import { TimerPreferences } from "./timer-preferences";
 import { SoundToggle } from "./sound-toggle";
 import { configOf } from "@/shared/pomodoro";
@@ -306,18 +306,18 @@ export function RunPanel({
 
   return (
     <div onPointerDown={unlockTimerSound}>
-      <div className="flex flex-col items-center pt-2 text-center">
+      <div className="flex flex-col items-center text-center">
         <ExecutionHeading
           goal={session.goal.title}
           task={session.task?.title}
           resumeHint={resumeHint}
         />
 
-        <div className="mt-7 grid w-full grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <div className="mt-4 flex w-full flex-wrap items-center justify-center gap-2 sm:mt-6 sm:gap-5">
           <div
             role="group"
             aria-label="计时模式"
-            className="flex justify-self-center rounded-full bg-stone-100 p-1 sm:col-start-2"
+            className="flex rounded-full bg-stone-100 p-1"
           >
             {(["pomodoro", "stopwatch"] as const).map((value) => (
               <button
@@ -334,7 +334,7 @@ export function RunPanel({
           <div
             aria-hidden={session.timerMode !== "pomodoro"}
             inert={session.timerMode !== "pomodoro"}
-            className={`flex items-center justify-center gap-2 sm:col-start-3 sm:justify-start sm:pl-2 ${session.timerMode === "pomodoro" ? "visible" : "invisible"}`}
+            className={`flex items-center justify-center gap-2 ${session.timerMode === "pomodoro" ? "" : "hidden"}`}
           >
             <TimerPreferences
               running
@@ -354,16 +354,17 @@ export function RunPanel({
               <PhaseProgress
                 config={session.timerConfig}
                 phases={session.phases}
-                currentId={phase.id}
+                currentId={allComplete ? undefined : phase.id}
+                isPending={pendingBreak || pendingFocus}
+                allComplete={allComplete}
               />
             )
           }
-          className={`${phase ? colors.surface : "bg-stone-50"} ${isPaused ? "opacity-60" : ""}`}
         >
-          <div className="flex flex-col items-center gap-0">
+          <div className="flex flex-col items-center gap-3 sm:gap-6">
             <p
               role="status"
-              className={`text-base leading-none font-medium ${colors.text}`}
+              className={`text-xs leading-none font-medium tracking-wide ${colors.text}`}
             >
               {allComplete
                 ? "番茄钟全部完成"
@@ -386,13 +387,13 @@ export function RunPanel({
               }
               value={formatTimeDigits(clockSeconds)}
               tone={isPaused ? "paused" : "running"}
-              className={`${colors.text} ${formatTimeDigits(clockSeconds).length > 5 ? "text-[2.6rem] sm:text-[3.75rem]" : "text-[3.75rem] sm:text-[5.25rem]"}`}
+              className={isPaused ? undefined : colors.text}
             />
           </div>
         </TimerStage>
         {allComplete && (
           <p className="mt-4 text-sm text-stone-600">
-            已完成全部 {config.iterations} 轮专注，辛苦了！
+            已完成全部 {config.iterations} 轮专注，休息一下吧。
             {automaticSaveFailed
               ? "保存失败，请重试。"
               : "正在自动保存本次投入…"}
@@ -405,136 +406,138 @@ export function RunPanel({
         )}
 
         <TooltipProvider delay={200}>
-          <div className="mt-7 flex w-full flex-wrap items-center justify-center gap-2">
-            {allComplete ? (
-              <Button
-                size="lg"
-                disabled={busy !== "none" || !automaticSaveFailed}
-                onClick={() => void saveCompletedSession()}
-                className="h-12 rounded-xl bg-[#537d61] px-6 text-white hover:bg-[#456950]"
-              >
-                {automaticSaveFailed && busy !== "finish"
-                  ? "重试保存"
-                  : "正在自动保存…"}
-              </Button>
-            ) : due ? (
-              <>
-                {!rest && (
-                  <Button
-                    size="lg"
-                    disabled={busy !== "none"}
-                    onClick={() => command("start_break")}
-                    className={`h-12 rounded-xl px-6 text-white ${breakKind === "long_break" ? "bg-[#b49350] hover:bg-[#9b7c3f]" : "bg-[#70917b] hover:bg-[#5c7c66]"}`}
-                  >
-                    {breakKind === "long_break" ? "开始长休息" : "开始休息"}
-                  </Button>
-                )}
+          <div className="mt-3 flex w-full justify-center sm:mt-6">
+            <TimerControls>
+              {allComplete ? (
                 <Button
                   size="lg"
-                  variant={rest ? "default" : "outline"}
-                  disabled={busy !== "none"}
-                  onClick={() => command("start_next_focus")}
-                  className={`h-12 rounded-xl px-6 ${rest ? "bg-[#d85c41] text-white hover:bg-[#c84f36]" : ""}`}
+                  disabled={busy !== "none" || !automaticSaveFailed}
+                  onClick={() => void saveCompletedSession()}
+                  className="h-12 rounded-xl bg-[#537d61] px-6 text-white hover:bg-[#456950]"
                 >
-                  {!rest && (
-                    <SkipForward className="size-4" aria-hidden="true" />
-                  )}
-                  {rest ? "开始下一轮" : "跳过休息"}
+                  {automaticSaveFailed && busy !== "finish"
+                    ? "重试保存"
+                    : "正在自动保存…"}
                 </Button>
-              </>
-            ) : (
-              <>
+              ) : due ? (
+                <>
+                  {!rest && (
+                    <Button
+                      size="lg"
+                      disabled={busy !== "none"}
+                      onClick={() => command("start_break")}
+                      className={`h-12 rounded-xl px-6 text-white ${breakKind === "long_break" ? "bg-[#b49350] hover:bg-[#9b7c3f]" : "bg-[#70917b] hover:bg-[#5c7c66]"}`}
+                    >
+                      {breakKind === "long_break" ? "开始长休息" : "开始休息"}
+                    </Button>
+                  )}
+                  <Button
+                    size="lg"
+                    variant={rest ? "default" : "outline"}
+                    disabled={busy !== "none"}
+                    onClick={() => command("start_next_focus")}
+                    className={`h-12 rounded-xl px-6 ${rest ? "bg-[#d85c41] text-white hover:bg-[#c84f36]" : ""}`}
+                  >
+                    {!rest && (
+                      <SkipForward className="size-4" aria-hidden="true" />
+                    )}
+                    {rest ? "开始下一轮" : "跳过休息"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="lg"
+                          disabled={busy !== "none"}
+                          onClick={togglePause}
+                          className={`h-12 gap-2 rounded-xl px-6 text-base text-white ${rest ? "bg-[#70917b] hover:bg-[#5c7c66]" : "bg-[#d85c41] hover:bg-[#c84f36]"}`}
+                        />
+                      }
+                    >
+                      {busy === "pause" || busy === "resume" ? (
+                        "处理中…"
+                      ) : isPaused ? (
+                        <>
+                          <Play
+                            className="size-4 fill-current"
+                            aria-hidden="true"
+                          />
+                          继续
+                        </>
+                      ) : (
+                        <>
+                          <Pause className="size-4" aria-hidden="true" />
+                          暂停
+                        </>
+                      )}
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {isPaused ? "继续" : "暂停"}（Space）
+                    </TooltipContent>
+                  </Tooltip>
+                  {rest && (
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      disabled={busy !== "none"}
+                      onClick={() => command("start_next_focus")}
+                      className="h-12 rounded-xl"
+                    >
+                      <SkipForward className="size-4" aria-hidden="true" />
+                      跳过休息
+                    </Button>
+                  )}
+                </>
+              )}
+              {!allComplete && (
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <Button
-                        size="lg"
+                        size="icon"
+                        variant="outline"
                         disabled={busy !== "none"}
-                        onClick={togglePause}
-                        className={`h-12 gap-2 rounded-xl px-6 text-base text-white ${rest ? "bg-[#70917b] hover:bg-[#5c7c66]" : "bg-[#d85c41] hover:bg-[#c84f36]"}`}
+                        onClick={handleFinish}
+                        aria-label={
+                          busy === "finish" ? "结束保存中" : "结束并保存"
+                        }
+                        className="size-12 rounded-xl border-stone-300 bg-white"
                       />
                     }
                   >
-                    {busy === "pause" || busy === "resume" ? (
-                      "处理中…"
-                    ) : isPaused ? (
-                      <>
-                        <Play
-                          className="size-4 fill-current"
-                          aria-hidden="true"
-                        />
-                        继续
-                      </>
+                    {busy === "finish" ? (
+                      <LoaderCircle
+                        className="size-5 animate-spin"
+                        aria-hidden="true"
+                      />
                     ) : (
-                      <>
-                        <Pause className="size-4" aria-hidden="true" />
-                        暂停
-                      </>
+                      <Square className="size-5" aria-hidden="true" />
                     )}
                   </TooltipTrigger>
-                  <TooltipContent>
-                    {isPaused ? "继续" : "暂停"}（Space）
-                  </TooltipContent>
+                  <TooltipContent>结束并保存（F）</TooltipContent>
                 </Tooltip>
-                {rest && (
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    disabled={busy !== "none"}
-                    onClick={() => command("start_next_focus")}
-                    className="h-12 rounded-xl"
-                  >
-                    <SkipForward className="size-4" aria-hidden="true" />
-                    跳过休息
-                  </Button>
-                )}
-              </>
-            )}
-            {!allComplete && (
+              )}
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <Button
                       size="icon"
-                      variant="outline"
+                      variant="ghost"
                       disabled={busy !== "none"}
-                      onClick={handleFinish}
-                      aria-label={
-                        busy === "finish" ? "结束保存中" : "结束并保存"
-                      }
-                      className="size-12 rounded-xl border-stone-300 bg-white"
+                      onClick={onOpenCancel}
+                      aria-label="取消本次执行"
+                      className="size-12 rounded-xl text-stone-500 hover:text-red-700"
                     />
                   }
                 >
-                  {busy === "finish" ? (
-                    <LoaderCircle
-                      className="size-5 animate-spin"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <Square className="size-5" aria-hidden="true" />
-                  )}
+                  <X className="size-5" aria-hidden="true" />
                 </TooltipTrigger>
-                <TooltipContent>结束并保存（F）</TooltipContent>
+                <TooltipContent>取消本次执行</TooltipContent>
               </Tooltip>
-            )}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    disabled={busy !== "none"}
-                    onClick={onOpenCancel}
-                    aria-label="取消本次执行"
-                    className="size-12 rounded-xl text-stone-500 hover:text-red-700"
-                  />
-                }
-              >
-                <X className="size-5" aria-hidden="true" />
-              </TooltipTrigger>
-              <TooltipContent>取消本次执行</TooltipContent>
-            </Tooltip>
+            </TimerControls>
           </div>
         </TooltipProvider>
       </div>
