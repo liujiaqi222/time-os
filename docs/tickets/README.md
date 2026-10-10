@@ -1,6 +1,6 @@
 # Time OS v0.3 — Implementation Tickets
 
-当前依据：[PRD v0.3](../prd.md)。体验说明：[产品方向](../product-direction-v0.3.md)。
+当前依据：[PRD v0.3](../prd.md)。
 
 **状态：**T06–T10 已在 GitHub 创建对应 Issue（#25–#29），待按序进行代码实现。
 
@@ -10,11 +10,11 @@
 
 | ID | Issue 正文 | GitHub Issue | 完成后用户能做什么 | 硬依赖 |
 | --- | --- | --- | --- | --- |
-| T06 | [目标直连的执行首页与正计时闭环](v0.3/T06-execution-foundation.md) | [#25](https://github.com/liujiaqi222/time-os/issues/25) | 有目标即可在首页开始、暂停、结束、留下提示，下次直接接着做 | 当前代码基线 |
-| T07 | [三幕目标引导与 AI 写回](v0.3/T07-goal-onboarding.md) | [#26](https://github.com/liujiaqi222/time-os/issues/26) | 新用户手动或通过 AI 建立目标，带着目标进入第一次执行 | T06 |
-| T08 | [完整番茄钟与跨端计时](v0.3/T08-pomodoro-timer.md) | [#27](https://github.com/liujiaqi222/time-os/issues/27) | 使用专注 / 休息循环，关页、重连或换设备后仍得到准确状态 | T06 |
-| T09 | [足迹、目标投入与记录纠错](v0.3/T09-footprints-history.md) | [#28](https://github.com/liujiaqi222/time-os/issues/28) | 看活动日历、做过的事情，按目标回看并补录 / 修正 | T06、T08 |
-| T10 | [完整目标维护、设置与全站收尾](v0.3/T10-management-completion.md) | [#29](https://github.com/liujiaqi222/time-os/issues/29) | 完全通过 Web 日常使用，AI 能完成同等操作，全站采用新流程 | T07、T09 |
+| T06 | [目标直连的执行首页与正计时闭环](T06-execution-foundation.md) | [#25](https://github.com/liujiaqi222/time-os/issues/25) | 有目标即可在首页开始、暂停、结束、留下提示，下次直接接着做 | 当前代码基线 |
+| T07 | [三幕目标引导与 AI 写回](T07-goal-onboarding.md) | [#26](https://github.com/liujiaqi222/time-os/issues/26) | 新用户手动或通过 AI 建立目标，带着目标进入第一次执行 | T06 |
+| T08 | [完整番茄钟与跨端计时](T08-pomodoro-timer.md) | [#27](https://github.com/liujiaqi222/time-os/issues/27) | 使用专注 / 休息循环，关页、重连或换设备后仍得到准确状态 | T06 |
+| T09 | [足迹、目标投入与记录纠错](T09-footprints-history.md) | [#28](https://github.com/liujiaqi222/time-os/issues/28) | 看活动日历、做过的事情，按目标回看并补录 / 修正 | T06、T08 |
+| T10 | [完整目标维护、设置与全站收尾](T10-management-completion.md) | [#29](https://github.com/liujiaqi222/time-os/issues/29) | 完全通过 Web 日常使用，AI 能完成同等操作，全站采用新流程 | T07、T09 |
 
 推荐交付顺序：**T06 → T07 → T08 → T09 → T10**。T07 / T08 的逻辑依赖均为 T06，但共享执行页与设置契约，默认顺序开发，不要求并行。
 
@@ -58,14 +58,3 @@ T06 先以正计时交付真实可用的执行首页；T07 在此基础上完成
 
 当前任务只生成 PRD 与 issue 正文，不发布 GitHub issue、PR 或部署。后续需要发布时，先核对仓库、账号、已有 issue 和最终正文，再填回真实链接。
 
-## 历史 tickets：v0.2
-
-以下只记录上一轮范围，不能作为 v3 新开发的验收依据。GitHub 状态未在本轮重新核实。
-
-| ID | 原票 | 历史链接 |
-| --- | --- | --- |
-| T01 | [Foundation, authentication and setup](T01-foundation-auth-setup.md) | [#1](https://github.com/liujiaqi222/time-os/issues/1) |
-| T02 | [Planning system and Current Next](T02-planning-current-next.md) | [#2](https://github.com/liujiaqi222/time-os/issues/2) |
-| T03 | [Focus execution loop](T03-focus-execution.md) | [#3](https://github.com/liujiaqi222/time-os/issues/3) |
-| T04 | [History, manual records and statistics](T04-history-stats.md) | [#4](https://github.com/liujiaqi222/time-os/issues/4) |
-| T05 | [Parity hardening and self-hosted release](T05-release-hardening.md) | [#5](https://github.com/liujiaqi222/time-os/issues/5) |
